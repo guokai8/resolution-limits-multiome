@@ -2,9 +2,12 @@
 out/
 results/
 results_methods/
+
+# 中间产物不入库，但保留发表版图件
 *.png
 *.pdf
-!figures/**/*.R
+!figures/output/*.png
+!figures/output/*.pdf
 
 # primary data (never commit; see data/DATA_SOURCES.md)
 *.h5ad

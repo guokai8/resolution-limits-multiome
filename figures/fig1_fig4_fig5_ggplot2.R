@@ -98,29 +98,6 @@ p1b <- ggplot(qual, aes(dim, val, colour = rep)) +
   labs(title = "Quality is unbiased", x = NULL, y = "Value / median") +
   theme_pub()
 
-surv <- data.frame(
-  name = c("NIH-CARD PFC", "SEA-AD multiome", "ROSMAP multi-region",
-           "GSE212630", "This cohort"),
-  size = c("362 samples", "28 libraries", "283 libraries", "14 donors", "79 donors"),
-  note = c("1 library/donor", "28 donors", "1 per donor x region",
-           "below minimum", "26 replicate pairs"),
-  ok   = c(FALSE, FALSE, FALSE, FALSE, TRUE)) %>%
-  mutate(y = rev(seq_len(n())))
-
-p1c <- ggplot(surv) +
-  geom_point(aes(0, y, colour = ok, shape = ok), size = 1.6) +
-  geom_text(aes(.07, y, label = name, colour = ok,
-                fontface = ifelse(ok, "bold", "plain")),
-            hjust = 0, size = 2.4) +
-  geom_text(aes(1.22, y + .17, label = size), hjust = 0, size = 2.0, colour = "grey45") +
-  geom_text(aes(1.22, y - .17, label = note, colour = ok), hjust = 0, size = 2.0) +
-  scale_colour_manual(values = c(`TRUE` = C_ULM, `FALSE` = "grey65")) +
-  scale_shape_manual(values = c(`TRUE` = 16, `FALSE` = 4)) +
-  scale_x_continuous(limits = c(-0.05, 2.45)) +
-  scale_y_continuous(limits = c(.4, 5.9)) +
-  labs(title = "Survey for replicates") +
-  theme_blank()
-
 lay <- data.frame(
   lab  = c("L1  Composition", "L2  Expression", "L3  Regulation"),
   need = c("cell assignment", "aggregated profile", "per-element, per-cell"),
@@ -144,9 +121,10 @@ p1d <- ggplot(lay) +
   labs(title = "Three layers") +
   theme_blank()
 
-fig1 <- p1a + p1b + p1c + p1d +
-  plot_layout(widths = c(1.05, .95, 1.6, .95)) + plot_annotation(tag_levels = "a")
-save_fig(fig1, OUT, "Fig1_resource", height = 70)
+fig1 <- p1a + p1b + p1d +
+  plot_layout(widths = c(1.15, 1, 0.95)) +
+  plot_annotation(tag_levels = "a")
+save_fig(fig1, OUT, "Fig1_resource", height = 68)
 
 ## ======================================================================
 ## Fig 4
@@ -259,8 +237,8 @@ or_sets <- bind_rows(
   mutate(lab = factor(lab, levels = rev(lab)), dep = or < 1)
 
 p5a <- ggplot(or_sets, aes(or, lab, colour = dep)) +
-  annotate("rect", xmin = 2.4, xmax = 5.6, ymin = -Inf, ymax = Inf,
-           fill = C_ULM, alpha = .07) +
+  annotate("rect", xmin = 2.45, xmax = 4.01, ymin = -Inf, ymax = Inf,
+           fill = C_ULM, alpha = .07) +   # 四个参照 link 集的实际区间
   geom_vline(xintercept = 1, linetype = "22", linewidth = .45, colour = "grey20") +
   geom_linerange(aes(xmin = lo, xmax = hi), linewidth = .9) +
   geom_point(size = 1.5) +

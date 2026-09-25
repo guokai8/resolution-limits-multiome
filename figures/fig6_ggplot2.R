@@ -67,9 +67,9 @@ pb <- ggplot(ex, aes(n_eff, median_abs_log2FC)) +
   geom_line(data = linee, aes(n, f), colour = C_ULM, linewidth = .5, inherit.aes = FALSE) +
   scale_x_log10(breaks = c(10, 50, 200, 1000), labels = label_comma(accuracy = 1)) +
   scale_y_log10(breaks = c(.1, .25, .5, 1, 2)) +
-  labs(tag = "b", title = "Expression: detectable fold change",
+  labs(tag = "b", title = "Expression: technical-noise threshold",
        x = "effective nuclei per cell type",
-       y = "floor, absolute log2 fold change") +
+       y = "threshold, absolute log2 fold change") +
   annotate("text", x = 11, y = .13, hjust = 0, size = 2.5, colour = C_ULM,
            label = sprintf("floor = 4.79 n^%.3f", cfe[2])) +
   theme_pub()
@@ -89,9 +89,9 @@ pc <- ggplot(gridc, aes(N, F, colour = lab, linetype = lab)) +
   scale_linetype_manual(values = c("42", "solid", "solid")) +
   scale_x_log10(breaks = c(1e4, 1e5, 1e6), labels = c("10k", "100k", "1M")) +
   scale_y_log10(breaks = c(.1, .3, 1, 3, 10)) +
-  labs(tag = "c", title = "Composition: detectable difference",
+  labs(tag = "c", title = "Composition: technical-noise threshold",
        x = "nuclei per group",
-       y = "difference, percentage points") +
+       y = "threshold, percentage points") +
   theme_pub() +
   theme(legend.position = c(.03, .06), legend.justification = c(0, 0),
         legend.title = element_blank(), legend.text = element_text(size = 6.4),
