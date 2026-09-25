@@ -1,0 +1,114 @@
+# Resolution limits of single-nucleus multiome analysis
+
+Analysis code and derived results for *Resolution limits of single-nucleus
+multiome analysis: composition, expression and regulatory inference*.
+
+Single-nucleus multiome studies routinely present three kinds of claim side by
+side: that a cell type changes in proportion, that genes change within a cell
+type, and that accessible regions are linked to genes within that type. This
+repository holds the code that measures the technical floor of all three, using
+donor-matched technical replicates from four cohorts.
+
+## What you can reproduce from this repository alone
+
+Every figure in the paper regenerates from `data/derived_results/` without
+touching any primary data:
+
+```bash
+Rscript figures/fig2_fig3_ggplot2.R      data/derived_results out
+Rscript figures/fig6_ggplot2.R           data/derived_results out
+Rscript figures/supp_figs_ggplot2.R      data/derived_results out
+# Figure 1 additionally needs the primary cohort's donor metadata:
+Rscript figures/fig1_fig4_fig5_ggplot2.R data/derived_results out <metadata_dir>
+```
+
+Requires R ≥ 4.5 with `ggplot2`, `dplyr`, `readr`, `patchwork`, `scales`,
+`ragg` and `tidyr`.
+
+Reproducing the analyses themselves requires the primary datasets, which are
+public but not redistributed here. `data/DATA_SOURCES.md` lists every accession,
+download link and two acquisition pitfalls that cost us time.
+
+## Layout
+
+```
+analysis/       primary pipeline, run in numerical order (p5_00 … p5_16)
+reassessment/   later analyses: PsychAD split aliquots, the Layer 3 external
+                test, the two nucleus ladders, the 190-contrast re-assessment
+figures/        figure generation (R / ggplot2), shared theme in fig_common.R
+data/           DATA_SOURCES.md and the derived tables the figures are built from
+protocol/       pre-specification, freeze hash, novelty audit, replication and
+                submission records
+```
+
+### Analysis pipeline
+
+| Step | Produces |
+|---|---|
+| `p5_01_pseudobulk_stream.py` | pseudobulk by donor × chip × cell type |
+| `p5_04_technical_replicates.py` | composition and expression discrepancies per replicate pair |
+| `p5_05_download_refs.sh`, `p5_06_build_tss.py` | GENCODE v32 and the TSS table |
+| `p5_07_extract_cells.py`, `p5_08_claimA_features.py` | equalised 150-nucleus substrate; peak–gene links |
+| `p5_09`, `p5_10` | scaling fits for layers 1 and 2 |
+| `p5_12`–`p5_14` | Seattle atlas replication; matched null and stratified fits |
+| `p5_15_promoter_OR_external.py` | promoter-enrichment odds ratios for external link sets |
+
+`p5_16_figures.py` is a superseded matplotlib script kept only for provenance.
+The published figures come from `figures/`.
+
+### Re-assessment and external tests
+
+| Script | What it does |
+|---|---|
+| `psychad_floors.py`, `psychad_L2.py` | composition and expression floors in 1,129 PsychAD split-aliquot donors |
+| `floor_reassessment.py` | 190 deposited composition contrasts against the floor |
+| `nabec_layer3.py` | Layer 3 in the external cohort; `--log1p --min-det-frac --fdr-all-pairs` align it with `p5_08` |
+| `nabec_L3_report.py`, `nabec_L3_ladder_fit.py` | Mantel–Haenszel pooling and crossing-point estimates |
+| `primary_ladder_extract.py`, `primary_ladder_run.py` | the same nucleus ladder inside the primary cohort |
+
+## Three definitions that are easy to confuse
+
+**Composition floor.** For a replicate pair and cell type with proportions
+f₁, f₂ and pooled proportion p: `z = |f₁ − f₂| / sqrt(p(1−p))`. The multinomial
+expectation is `sqrt(2/n_eff)` with `n_eff = 2/(1/n₁ + 1/n₂)`. Overdispersion is
+the **root mean square** across pairs of `z / sqrt(2/n_eff)`, not a median.
+
+**Expression floor.** Per pair and cell type, the median over genes of
+`|log2(CPM₁+1) − log2(CPM₂+1)|`, over genes with CPM > 0 in **either** member
+(union, ≥200 genes). The matched null resamples both members multinomially from
+their pooled profile at the observed depths.
+
+**Promoter-enrichment odds ratio.** The odds of promoter-proximal
+(|peak midpoint − TSS| ≤ 3 kb) among detected links against the same odds among
+all eligible (peak, TSS) pairs in the window, Haldane–Anscombe corrected. This is
+**not** the TSS enrichment score used in ATAC quality control: that score is
+computed on reads and asks whether a library captured open chromatin at
+promoters, while this one is computed on inferred peak–gene pairs. A library can
+have an excellent TSS enrichment score and still produce a link set with an odds
+ratio at or below one, which is what the paper reports.
+
+⚠️ The odds ratio depends on two conventions that must be reported with it:
+which pairs constitute the background, and whether pairs that cannot be called
+(peaks with no variance at the depth analysed) enter the denominator of the
+multiple-testing correction. Holding nuclei, depth and code otherwise fixed,
+those two choices alone move the ratio between 0.66 and 1.5.
+
+## Scientific record
+
+`protocol/` holds what a reviewer or a later reader would need to judge the work,
+including the pre-specification and its SHA-256 freeze, the result that the
+pre-specified primary outcome was a poorly chosen question and is reported as
+such, the literature searches behind every novelty claim, and the record of the
+Layer 3 external replication, which includes a first pass whose pipeline was not
+aligned with `p5_08` and which was discarded once the mismatch was found.
+
+## Citation
+
+Guo, K. Resolution limits of single-nucleus multiome analysis: composition,
+expression and regulatory inference. *Manuscript in preparation* (2026).
+
+## License
+
+MIT, see `LICENSE`. The derived tables in `data/derived_results/` are released
+under the same terms; the primary datasets they were computed from remain under
+the licences of their respective depositors, listed in `data/DATA_SOURCES.md`.

@@ -1,0 +1,30 @@
+# outputs
+out/
+results/
+results_methods/
+*.png
+*.pdf
+!figures/**/*.R
+
+# primary data (never commit; see data/DATA_SOURCES.md)
+*.h5ad
+*.mtx
+*.tsv.gz
+*.gtf.gz
+*.npz
+data/raw/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+
+# os
+.DS_Store

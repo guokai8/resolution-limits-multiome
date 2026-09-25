@@ -1,0 +1,6 @@
+# Python, tested on 3.11
+numpy>=1.26
+scipy>=1.11
+pandas>=2.1
+h5py>=3.10
+anndata>=0.10
