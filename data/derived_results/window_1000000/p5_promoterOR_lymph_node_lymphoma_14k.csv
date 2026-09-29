@@ -1,0 +1,2 @@
+label,n_link,prox_link,n_tested,prox_tested,window,OR,lo,hi
+lymph_node_lymphoma_14k,134196,3644,3830965,29512,1000000,3.595807585655922,3.486341100839026,3.714573372763293

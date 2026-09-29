@@ -33,7 +33,7 @@ lad <- bind_rows(pri, ext) |>
 COHC <- c("Primary (motor cortex)" = C_ULM, "External (prefrontal cortex)" = C_SEA)
 
 pa <- ggplot(lad, aes(n, OR, colour = cohort)) +
-  annotate("rect", xmin = 130, xmax = 9000, ymin = 2.45, ymax = 4.01,
+  annotate("rect", xmin = 130, xmax = 9000, ymin = 2.26, ymax = 3.56,
            fill = C_LITE, alpha = .3) +
   annotate("text", x = 158, y = 3.15, label = "full-depth link sets",
            hjust = 0, size = 2.3, colour = C_ULM) +
@@ -56,7 +56,9 @@ pa <- ggplot(lad, aes(n, OR, colour = cohort)) +
         legend.key.width = unit(11, "pt"))
 
 ## ---- b. 表达层：下限对核数 --------------------------------------------------
+# 50 核配对准则同样管表达层：ALS26 第二块芯片只有 37 个核，不合格
 ex <- read_csv(file.path(DR, "p5_floor_scaling_pairs.csv"), show_col_types = FALSE) |>
+  filter(donor != "ALS26") |>
   filter(median_abs_log2FC > 0, n_eff > 0)
 cfe  <- coef(lm(log(median_abs_log2FC) ~ log(n_eff), data = ex))
 linee <- tibble(n = exp(seq(log(8), log(2000), length.out = 100))) |>
@@ -71,17 +73,21 @@ pb <- ggplot(ex, aes(n_eff, median_abs_log2FC)) +
        x = "effective nuclei per cell type",
        y = "threshold, absolute log2 fold change") +
   annotate("text", x = 11, y = .13, hjust = 0, size = 2.5, colour = C_ULM,
-           label = sprintf("floor = 4.79 n^%.3f", cfe[2])) +
+           label = sprintf("floor = %.2f n^%.3f", exp(cfe[1]), cfe[2])) +
   theme_pub()
 
 ## ---- c. 组成层：最小可检测差异 ----------------------------------------------
+kap <- read_csv(file.path(DR, "p5_17_B7_cohort_overdispersion.csv"),
+                show_col_types = FALSE)
+k_sea <- round(kap$kappa[kap$cohort == "Seattle atlas"], 2)
+k_mc  <- round(kap$kappa[kap$cohort == "Motor cortex"], 2)
 gridc <- expand.grid(N = 10^seq(log10(2e3), log10(2e6), length.out = 80),
-                     kappa = c(1, 3.90, 4.28)) |>
+                     kappa = c(1, k_sea, k_mc)) |>
   mutate(F = 100 * 1.96 * kappa * sqrt(.1 * .9) * sqrt(2 / N),
-         lab = factor(kappa, levels = c(1, 3.90, 4.28),
+         lab = factor(kappa, levels = c(1, k_sea, k_mc),
                       labels = c("kappa = 1 (multinomial)",
-                                 "kappa = 3.90 (Seattle)",
-                                 "kappa = 4.28 (motor cortex)")))
+                                 sprintf("kappa = %.2f (Seattle)", k_sea),
+                                 sprintf("kappa = %.2f (motor cortex)", k_mc))))
 pc <- ggplot(gridc, aes(N, F, colour = lab, linetype = lab)) +
   geom_line(linewidth = .5) +
   geom_hline(yintercept = 1, linetype = "22", linewidth = .35, colour = "grey45") +
@@ -116,6 +122,6 @@ cross <- function(d, t) {
 }
 for (co in levels(lad$cohort)) {
   d <- lad[lad$cohort == co, ]
-  cat(sprintf("%-30s OR=1 at n=%.0f;  OR=2.45 at n=%.0f\n", co, cross(d, 1), cross(d, 2.45)))
+  cat(sprintf("%-30s OR=1 at n=%.0f;  OR=2.26 at n=%.0f\n", co, cross(d, 1), cross(d, 2.26)))
 }
 cat(sprintf("expression exponent %.3f\n", cfe[2]))

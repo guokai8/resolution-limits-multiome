@@ -88,6 +88,9 @@ def main():
     ap.add_argument("--tss", required=True)
     ap.add_argument("--label", default="external")
     ap.add_argument("--out", default="results")
+    ap.add_argument("--window", type=int, default=0,
+                    help="±窗口（bp）。0 = 沿用旧行为，由 bedpe 实测最大距离定。"
+                         "给定时**同时**收紧背景集与检出集，两者必须一致。")
     args = ap.parse_args()
 
     tss = pd.read_csv(args.tss)
@@ -100,9 +103,16 @@ def main():
     pg = load_bedpe(args.bedpe)
     print(f"{len(pg):,} 条 peak–gene link")
 
-    # 窗口从实测距离取（cellranger-arc 默认 ±1 Mb）
-    window = int(np.ceil(pg.dist.max() / 1e5) * 1e5)
-    print(f"窗口（由 bedpe 实测最大距离定）: ±{window:,}")
+    # 窗口：默认由实测距离取（cellranger-arc 默认 ±1 Mb），也可显式指定。
+    # ⚠️ 窗口同时界定背景集（build_tested）与检出集。旧版只用它算背景，
+    #    因为窗口恰好等于实测最大距离时所有 link 都在窗内，两者自动一致；
+    #    一旦显式收紧窗口，就必须同步过滤检出的 link，否则 2x2 表不自洽。
+    if args.window > 0:
+        window = args.window
+        print(f"窗口（显式指定）: ±{window:,}")
+    else:
+        window = int(np.ceil(pg.dist.max() / 1e5) * 1e5)
+        print(f"窗口（由 bedpe 实测最大距离定）: ±{window:,}")
 
     # 检出 link 的启动子邻近判定：用**同一份 TSS**
     t = tss.set_index("gene_name")
@@ -116,6 +126,13 @@ def main():
     q["tchrom"] = t.loc[q.gene, "chrom"].values
     q = q[q.chrom == q.tchrom]
     q["d2tss"] = (q.peak_mid - q.tss).abs()
+
+    # 检出集必须与背景集用同一个窗口
+    n_before = len(q)
+    q = q[q.d2tss <= window]
+    if n_before != len(q):
+        print(f"  窗口过滤：检出 link {n_before:,} -> {len(q):,} "
+              f"（去掉 {n_before - len(q):,} 条超出 ±{window:,} 的）")
 
     a = int((q.d2tss <= PROMOTER).sum())      # 检出 & 近端
     b = len(q) - a                            # 检出 & 远端

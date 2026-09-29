@@ -1,0 +1,2 @@
+comparison,difference,lo,hi,p_two_sided,n_boot
+motor_cortex_minus_seattle,0.432,0.1399,0.7914,0.003,4000

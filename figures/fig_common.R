@@ -2,7 +2,8 @@
 # 被 fig2_fig3_ggplot2.R 与 fig1_fig4_fig5_ggplot2.R source
 
 suppressPackageStartupMessages({
-  library(ggplot2); library(dplyr); library(readr)
+  library(ggplot2)
+library(tidyr); library(dplyr); library(readr)
   library(patchwork); library(scales); library(ragg)
 })
 

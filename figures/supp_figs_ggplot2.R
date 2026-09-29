@@ -71,8 +71,19 @@ sf2 <- ggplot(dd, aes(fold, OR)) +
 save2(sf2, "SuppFig2_depth_series", 90, 70)
 
 ## ---- SF3 · 口径敏感性 -------------------------------------------------------
+# ⚠️ 旧版把 `convention` 的两个水平当作口径对比，但它们的 depth_atac 相差 5–22 倍
+#    （unmatched 27,973–120,798 对 p5_08 matched 5,564），那是**深度**对比，不是口径对比。
+#    真正的口径对比在同一行内、同一深度上：OR（把不可检验的 peak 计入背景与 BH 分母）
+#    对 OR_varpeaks（排除它们）。只取深度固定的那一组。
 cv <- read_csv(file.path(DR, "nabec_L3_convention_sensitivity.csv"), show_col_types = FALSE) |>
-  mutate(convention = factor(convention, levels = c("unmatched", "p5_08 matched"),
+  filter(convention == "p5_08 matched") |>
+  transmute(celltype,
+            incl_OR = OR,  incl_lo = lo,  incl_hi = hi,
+            excl_OR = OR_varpeaks, excl_lo = lo_varpeaks, excl_hi = hi_varpeaks) |>
+  pivot_longer(-celltype,
+               names_to = c("conv", ".value"),
+               names_pattern = "(incl|excl)_(.*)") |>
+  mutate(convention = factor(conv, levels = c("excl", "incl"),
                              labels = c("background and FDR denominator\nexclude non-callable peaks",
                                         "both include them (as in this study)")))
 sf3 <- ggplot(cv, aes(reorder(celltype, OR), OR, colour = convention)) +
@@ -83,7 +94,7 @@ sf3 <- ggplot(cv, aes(reorder(celltype, OR), OR, colour = convention)) +
   coord_flip() +
   scale_colour_manual(values = c(C_SEA, C_ULM)) +
   scale_y_log10(breaks = c(.5, 1, 2)) +
-  labs(x = NULL, y = "enrichment odds ratio, same nuclei and same depth") +
+  labs(x = NULL, y = "enrichment odds ratio, same nuclei, same depth (5,564 ATAC fragments)") +
   theme_pub() +
   theme(legend.position = "bottom", legend.title = element_blank(),
         legend.text = element_text(size = 6.2), legend.key.height = unit(13, "pt"))

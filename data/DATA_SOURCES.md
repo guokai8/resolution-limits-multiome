@@ -66,12 +66,18 @@ Used for: replication of the composition and expression floors (80 donors with �
 Four public 10x Genomics multiome demonstration datasets, processed with Cell Ranger ARC
 2.0.0, distributed under CC BY 4.0 from https://www.10xgenomics.com/datasets
 
-| Dataset | Peaks | peak–gene links used | Promoter-enrichment OR |
-|---|---|---|---|
-| `human_brain_3k` | 133,986 | 178,195 | 4.012 [3.906, 4.125] |
-| `pbmc_granulocyte_sorted_3k` | 98,290 | 101,670 | 3.074 [2.961, 3.196] |
-| `pbmc_granulocyte_sorted_10k` | 143,836 | 476,703 | 2.451 [2.399, 2.506] |
-| `lymph_node_lymphoma_14k` | 109,714 | 134,955 | 3.575 [3.466, 3.693] |
+Reported at ±500 kb, the window of the primary analysis. The background and
+the detected link set are restricted to the same window; the earlier ±1 Mb
+figures bounded only the background, which is why they differ. Both windows
+are deposited, under `derived_results/window_500000/` and `window_1000000/`;
+regenerate with `code/analysis/p5_18_download_arc_refs.sh` then
+`p5_19_recompute_refs_at_window.sh`. | Dataset | Peaks | links used (±500 kb)
+| OR at ±500 kb | OR at ±1 Mb | |---|---|---|---|---| | `human_brain_3k` |
+133,986 | 105,471 | 3.558 [3.465, 3.660] | 4.054 [3.947, 4.168] | |
+`pbmc_granulocyte_sorted_3k` | 98,290 | 61,520 | 2.723 [2.622, 2.833] | 3.087
+[2.974, 3.210] | | `pbmc_granulocyte_sorted_10k` | 143,836 | 274,818 | 2.261
+[2.212, 2.312] | 2.463 [2.410, 2.518] | | `lymph_node_lymphoma_14k` | 109,714
+| 82,732 | 3.127 [3.031, 3.231] | 3.596 [3.486, 3.715] |
 
 Local path: `ResearchD/Data/Other_Datasets/TenX_Multiome_Examples/files/`
 
@@ -94,8 +100,9 @@ A fifth external link set (OR 5.40 [5.30, 5.51]) appeared in an earlier draft, a
 published cell-type-resolved Alzheimer's disease multiome study. No citation, no input file and
 no code capable of recomputing it exists anywhere in the project, and `derived_results/` holds
 only the four sets above. A number no reader could reproduce has no place in the paper, so it
-was removed rather than reconstructed; the manuscript now reports four link sets, and the
-quoted range 2.45–4.01 was always the range of those four.
+was removed rather than reconstructed; the manuscript now reports four link
+sets, and the quoted range is the range of those four, 2.26–3.56 at the ±500
+kb window of the primary analysis.
 
 ## 4. Datasets used only in the floor re-assessment
 
@@ -179,7 +186,10 @@ re-processing any primary data.
 | `p5_floor_scaling_pairs.csv`, `seaad_L2_obs.csv`, `seaad_L2_null.csv` | per-pair expression floors with matched null |
 | `p5_floor_scaling_boot.csv`, `p5_two_layer_boot.csv` | bootstrap replicates of the scaling exponents |
 | `seaad_L2_by_celltype.csv` | within-cell-type exponents |
-| `p5_promoterOR_*.csv` | promoter-enrichment odds ratios, four external link sets |
+| `window_500000/p5_promoterOR_*.csv` | promoter-enrichment odds ratios, four
+external link sets, at the ±500 kb window of the primary analysis (also
+`window_1000000/`; the superseded inconsistent-window originals are in
+`superseded_inconsistent_window/`) |
 | `seaad_L3_libraries.csv` | feature linkages per external multiome library |
 | `p5_claimA_features.csv` | per-subtype independent link counts (equalised design) |
 | `p5_tss_gencode_v32.csv` | TSS table derived from GENCODE v32 |

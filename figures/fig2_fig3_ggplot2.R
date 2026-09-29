@@ -18,6 +18,7 @@
 args    <- commandArgs(trailingOnly = TRUE)
 RES     <- path.expand(if (length(args) >= 1) args[1] else "~/Desktop/P5_VulnerableEpigenome/results")
 OUT     <- path.expand(if (length(args) >= 2) args[2] else "~/Desktop/ResearchD/figures")
+DR_REPO <- if (length(args) >= 3) args[3] else "data/derived_results"
 
 source(file.path(dirname(sub("^--file=", "", grep("^--file=", commandArgs(FALSE),
                                                   value = TRUE)[1])), "fig_common.R"))
@@ -26,7 +27,8 @@ dir.create(OUT, showWarnings = FALSE, recursive = TRUE)
 ## ---- 读数据 -----------------------------------------------------------
 rd <- function(f) read_csv(file.path(RES, f), show_col_types = FALSE)
 
-als_L2 <- rd("p5_floor_scaling_pairs.csv") %>%
+# 50 核配对准则同样管表达层：ALS26 第二块芯片只有 37 个核，不合格
+als_L2 <- rd("p5_floor_scaling_pairs.csv") %>% filter(donor != "ALS26") %>%
   transmute(x = n_eff, y = median_abs_log2FC, cohort = "Motor cortex") %>%
   filter(x > 0, y > 0)
 sea_L2 <- rd("seaad_L2_obs.csv") %>%
@@ -60,7 +62,7 @@ leg <- function(d, labs, xpos, ypos) {              # 面板内文字图例
              x = xpos, y = ypos * (0.55^(seq_along(labs) - 1)))
 }
 
-f2a_leg <- leg(NULL, c("Motor cortex" = "Motor cortex  b = -0.507 [-0.569, -0.441]",
+f2a_leg <- leg(NULL, c("Motor cortex" = "Motor cortex  b = -0.497 [-0.567, -0.432]",
                        "Seattle atlas" = "Seattle atlas  b = -0.505 [-0.524, -0.483]"),
                xr[1] * 1.5, 0.075)
 f2b_leg <- leg(NULL, c("Motor cortex" = "Motor cortex  b = -0.152 [-0.340, +0.111]",
@@ -115,11 +117,14 @@ p2b <- ggplot(L1, aes(x, y, colour = cohort)) +
   theme_pub()
 
 # 四个队列，按重复所跨的步骤分组
+# κ 由 p5_17 从沉积的逐对表重算，不再写死字面量
 lv <- c("Motor cortex", "Seattle atlas", "PsychAD MSSM", "PsychAD RADC")
-od <- data.frame(cohort = factor(lv, levels = lv),
-                 od = c(4.28, 3.90, 1.357, 1.220),
-                 grp = c("incl. tissue + dissociation", "incl. separate sample",
-                         "loading / library only", "loading / library only"))
+od <- read_csv(file.path(DR_REPO, "p5_17_B7_cohort_overdispersion.csv"),
+               show_col_types = FALSE) |>
+  transmute(cohort = factor(cohort, levels = lv), od = kappa,
+            grp = c("incl. tissue + dissociation", "incl. separate sample",
+                    "loading / library only", "loading / library only")[
+                      match(cohort, lv)])
 p2c <- ggplot(od, aes(cohort, od, fill = grp)) +
   geom_col(width = .62) +
   geom_hline(yintercept = 1, linetype = "22", linewidth = .4, colour = "grey20") +

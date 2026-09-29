@@ -1,0 +1,2 @@
+label,n_link,prox_link,n_tested,prox_tested,window,OR,lo,hi
+pbmc_granulocyte_sorted_10k,274818,7782,2682789,34142,500000,2.260879142889068,2.212176005774894,2.3117446920516285

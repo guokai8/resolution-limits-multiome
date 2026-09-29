@@ -1,0 +1,5 @@
+cohort,n_pairs,n_donors,kappa,kappa_lo,kappa_hi,exponent
+Motor cortex,300,26,4.2678,2.9757,5.6643,-0.1516
+Seattle atlas,4014,80,3.8992,3.2683,4.4191,-0.5836
+PsychAD MSSM,25015,990,1.3565,1.3135,1.403,-0.5696
+PsychAD RADC,3527,139,1.2199,1.1668,1.2733,-0.5423

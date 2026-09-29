@@ -1,0 +1,5 @@
+depth_atac,fold,n_rows,n_seeds,OR_seeds_as_strata,lo_seeds_as_strata,hi_seeds_as_strata,OR_seeds_as_repeats,lo_seeds_as_repeats,hi_seeds_as_repeats
+5564,1.0,2,1,0.9405,0.6294,1.4053,0.9405,0.6294,1.4053
+11128,2.0,6,3,0.572,0.441,0.7421,0.5699,0.3493,0.93
+22256,4.0,6,3,0.5915,0.4627,0.7562,0.5885,0.3265,1.0607
+44512,8.0,6,3,0.5103,0.3896,0.6684,0.5031,0.2648,0.9559

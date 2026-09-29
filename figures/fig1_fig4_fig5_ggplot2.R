@@ -226,10 +226,14 @@ save_fig(fig4, OUT, "Fig4_regulatory_floor", height = 68)
 # 四个 cellranger-arc link 集直接读 p5_15 的产出；
 # ⚠️ 另两行无对应 CSV：已发表 AD multiome 的补充表不在盘上，
 #    本研究那一条由 L3 主分析给出，故按记录的数值补入。
-ext <- grep("_w[0-9]+\\.csv$", list.files(RES, "^p5_promoterOR_.*\\.csv$", full.names = TRUE),
-              value = TRUE, invert = TRUE) %>%
+# ⚠️ 必须用与主分析同窗口（±500 kb）的那一版：data/derived_results/window_500000/。
+#    旧的 ±1 Mb 版本（且窗口不自洽）已移入 superseded_inconsistent_window/，与 0.663 不可比。
+W500 <- file.path(dirname(RES), basename(RES), "window_500000")
+if (!dir.exists(W500)) W500 <- file.path("data/derived_results", "window_500000")
+ext <- list.files(W500, "^p5_promoterOR_.*\\.csv$", full.names = TRUE) %>%
   lapply(read_csv, show_col_types = FALSE) %>% bind_rows() %>%
   transmute(lab = sub("_sorted", "", label), or = OR, lo, hi)
+stopifnot(nrow(ext) == 4)
 # 四个 cellranger-arc 参照集直接读 p5_15 的产出；本研究那一条由 L3 主分析给出。
 or_sets <- bind_rows(
   ext %>% arrange(or),
@@ -237,7 +241,7 @@ or_sets <- bind_rows(
   mutate(lab = factor(lab, levels = rev(lab)), dep = or < 1)
 
 p5a <- ggplot(or_sets, aes(or, lab, colour = dep)) +
-  annotate("rect", xmin = 2.45, xmax = 4.01, ymin = -Inf, ymax = Inf,
+  annotate("rect", xmin = 2.26, xmax = 3.56, ymin = -Inf, ymax = Inf,
            fill = C_ULM, alpha = .07) +   # 四个参照 link 集的实际区间
   geom_vline(xintercept = 1, linetype = "22", linewidth = .45, colour = "grey20") +
   geom_linerange(aes(xmin = lo, xmax = hi), linewidth = .9) +
@@ -251,16 +255,19 @@ p5a <- ggplot(or_sets, aes(or, lab, colour = dep)) +
   theme_pub() +
   theme(axis.text.y = element_text(size = 6.5))
 
-# 同一个 link 集 (human_brain_3k) 在两个窗口下的 OR，来自 p5_15 --window
-win <- data.frame(w = factor(c("+/-1 Mb", "+/-1.7 Mb"),
-                             levels = c("+/-1 Mb", "+/-1.7 Mb")),
-                  or = c(4.012, 6.591))
+# 同一个 link 集 (human_brain_3k) 在三个窗口下的 OR，由 p5_15 --window 重算，
+# 背景集与检出集同步收紧（见 code/analysis/p5_19_recompute_refs_at_window.sh）。
+win <- data.frame(w = factor(c("+/-500 kb", "+/-1 Mb", "+/-1.7 Mb"),
+                             levels = c("+/-500 kb", "+/-1 Mb", "+/-1.7 Mb")),
+                  or = c(3.558, 4.054, 6.593))
 p5b <- ggplot(win, aes(w, or, fill = w)) +
   geom_col(width = .55) +
   geom_text(aes(label = sprintf("%.2f", or)), vjust = -0.5, size = 2.6,
             colour = "grey15") +
-  scale_fill_manual(values = c(C_ULM, C_LITE)) +
+  scale_fill_manual(values = c(C_ULM, C_MID, C_LITE)) +
   scale_y_continuous(limits = c(0, 7.6), expand = expansion(mult = c(0, .02))) +
+  scale_x_discrete(labels = c("+/-500 kb" = "+/-500\nkb", "+/-1 Mb" = "+/-1\nMb",
+                              "+/-1.7 Mb" = "+/-1.7\nMb")) +
   labs(title = "Window matters", x = NULL, y = "Odds ratio, same link set") +
   theme_pub() +
   theme(axis.text.x = element_text(size = 6.8))
