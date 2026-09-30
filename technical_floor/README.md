@@ -70,7 +70,7 @@ The paper's own deposited tables are in `data/example_inputs/`. Running on them 
 every published number, which is also the acceptance test:
 
 ```
-κ = 4.268 (95% CI 2.98–5.68), 300 pairs / 26 donors
+κ = 4.268 (95% CI 2.98–5.66), 300 pairs / 26 donors
   per cell type 1.53 to 8.50, r = +0.87 against log abundance
   nuclei per group for 1 percentage point:
       multinomial bound              6,915
@@ -87,7 +87,7 @@ expression floor = 4.58 × n^-0.497, 300 observations / 26 donors
 python3 -m unittest tests.test_technical_floor -v
 ```
 
-22 tests. One of them, `test_the_pair_criterion_changes_the_answer`, asserts that skipping
+23 tests. One of them, `test_the_pair_criterion_changes_the_answer`, asserts that skipping
 the minimum-nuclei criterion returns the superseded −0.507 rather than the published
 −0.497 — it exists so that the failure mode cannot come back silently.
 

@@ -117,13 +117,20 @@ class TestPairCriterion(unittest.TestCase):
         self.assertTrue(apply_pair_criterion(df, 50).included_in_fit.all())
 
 
-@unittest.skipUnless(EXAMPLES.exists(), "example inputs not built")
 class TestReproducesPublished(unittest.TestCase):
-    """工具跑论文的沉积数据，必须还原论文的数。"""
+    """工具跑论文的沉积数据，必须还原论文的数。
+
+    这一组**不允许被跳过**。整套测试的意义就在于此：若示例输入没有随包分发，
+    静默跳过会让测试打印 OK 而什么都没验证，反而比没有测试更坏。
+    """
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.cfg = FloorConfig(n_bootstrap=400, seed=0)
+        if not EXAMPLES.exists():
+            raise AssertionError(
+                f"示例输入缺失：{EXAMPLES}。这组测试是本包唯一的验收依据，"
+                f"不能跳过——请随包分发 data/example_inputs/。")
+        cls.cfg = FloorConfig(seed=0)
         cls.comp = estimate_composition_floor(
             read_composition(EXAMPLES / "motor_cortex_composition_pairs.csv"), cls.cfg)
         expr = read_expression(EXAMPLES / "motor_cortex_expression_floors.csv")
@@ -156,6 +163,13 @@ class TestReproducesPublished(unittest.TestCase):
         self.assertAlmostEqual(self.expr.coefficient, 4.58, places=2)
         self.assertEqual(self.expr.n_obs, 300)
         self.assertEqual(self.expr.n_donors, 26)
+
+    def test_confidence_intervals_match_the_manuscript(self) -> None:
+        """区间此前是工具与论文唯一不一致的地方，因此单独断言。"""
+        self.assertAlmostEqual(self.comp.kappa_lo, 2.98, places=2)
+        self.assertAlmostEqual(self.comp.kappa_hi, 5.66, places=2)
+        self.assertAlmostEqual(self.expr.exponent_lo, -0.567, places=3)
+        self.assertAlmostEqual(self.expr.exponent_hi, -0.432, places=3)
 
     def test_expression_thresholds(self) -> None:
         tbl = expression_design_table(self.expr).set_index("n_eff").log2fc_threshold

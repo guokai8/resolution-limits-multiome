@@ -208,7 +208,16 @@ def b3_ladder_seed_handling() -> List[Dict[str, object]]:
 # ----------------------------------------------------------------------------- B5
 def b5_kappa() -> List[Dict[str, object]]:
     """κ 的逐细胞类型取值、RMS 汇总及其自助区间。"""
-    src = read_csv(f"{DR}/p5_techrep_overdispersion.csv")
+    # 与 B9 同源：从沉积的逐对表重算，而不是读另一张前置汇总表。
+    # 两者此前在 12 个细胞类型里有 4 个不一致，正文引用的是这一份。
+    zz, nn, _ = _zn(COHORT_PAIR_TABLES[0][1], None)
+    ct = np.array([x["celltype"] for x in read_csv(COHORT_PAIR_TABLES[0][1])])
+    ratio = zz / np.sqrt(2.0 / nn)
+    src = [{"celltype": t,
+            "z_rms": math.sqrt(float((ratio[ct == t] ** 2).mean())),
+            "mean_frac": float(np.mean([float(x["p"]) for x in read_csv(COHORT_PAIR_TABLES[0][1])
+                                        if x["celltype"] == t]))}
+           for t in sorted(set(ct))]
     # 已发表的 κ = 4.28 是 z_rms 的 RMS，不是 overdispersion_ratio 那一列的 RMS
     k = np.array([float(x["z_rms"]) for x in src])
     ct = [x["celltype"] for x in src]

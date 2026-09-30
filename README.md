@@ -21,11 +21,14 @@ expression scaling fit, and the design tables derived from both.
 `technical_floor/README.md` documents the input formats. Requires only `numpy`
 and `pandas`. The example inputs are the paper's own deposited tables, so the
 run above reproduces every published value — which is also the acceptance
-test: ```bash python3 -m unittest tests.test_technical_floor -v # 22 tests ```
+test: ```bash python3 -m unittest tests.test_technical_floor -v # 23 tests ```
 Read `composition_kappa_by_celltype.csv` before the pooled κ. Across cell
 types κ varied 5.6-fold within the primary cohort against 1.1-fold between
-cohorts, and cost scales as κ², so the pooled value describes no individual
-cell type. ## What you can reproduce from this repository alone
+cohorts, and rose with abundance (r = 0.87); because cost scales as κ², that
+is a 31-fold range in required nuclei within one dataset. The pooled value
+describes no individual cell type. The same spread appears in all four
+replicate sets — see
+`supplementary_tables/Supplementary_Table_14_kappa_by_celltype_all_cohorts.csv`. ## What you can reproduce from this repository alone
 
 Every figure in the paper regenerates from `data/derived_results/` without
 touching any primary data:

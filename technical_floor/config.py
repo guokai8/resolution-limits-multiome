@@ -12,7 +12,9 @@ from dataclasses import dataclass
 # n_eff 取两库细胞数的调和平均。
 DEFAULT_MIN_NUCLEI_PER_PAIR = 50
 DEFAULT_MIN_GENES = 200
-DEFAULT_BOOTSTRAP = 2000
+# 1000 是论文沉积结果所用的次数；改动它会在第三位小数上移动区间，
+# 从而让工具与论文报告的区间不再逐位一致。
+DEFAULT_BOOTSTRAP = 1000
 DEFAULT_SEED = 0
 
 
