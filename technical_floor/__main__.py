@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from .composition import estimate_composition_floor
-from .config import FloorConfig
+from .config import DEFAULT_BOOTSTRAP, DEFAULT_SEED, FloorConfig
 from .design import (
     composition_design_table,
     composition_requirement,
@@ -39,8 +39,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="设计表所针对的细胞类型丰度（默认 0.10）")
     p.add_argument("--target-pp", type=float, default=1.0,
                    help="设计表要分辨的差异，单位百分点（默认 1.0）")
-    p.add_argument("--bootstrap", type=int, default=2000, help="自助次数（默认 2000）")
-    p.add_argument("--seed", type=int, default=0, help="随机种子（默认 0）")
+    p.add_argument("--bootstrap", type=int, default=DEFAULT_BOOTSTRAP,
+                   help=f"自助次数（默认 {DEFAULT_BOOTSTRAP}，即论文沉积结果所用的次数）")
+    p.add_argument("--seed", type=int, default=DEFAULT_SEED,
+                   help=f"随机种子（默认 {DEFAULT_SEED}）")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 

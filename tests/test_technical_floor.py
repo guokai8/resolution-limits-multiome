@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import math
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -17,9 +18,11 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 # 包在本仓库位于根目录，在论文工程里位于 code/；两种布局都要能跑
+technical_floor_path = None
 for candidate in (ROOT, ROOT / "code"):
     if (candidate / "technical_floor").is_dir():
         sys.path.insert(0, str(candidate))
+        technical_floor_path = candidate
         break
 
 from technical_floor import (  # noqa: E402
@@ -183,6 +186,31 @@ class TestReproducesPublished(unittest.TestCase):
         self.assertEqual(unfiltered.n_donors, 27)
         self.assertAlmostEqual(unfiltered.exponent, -0.507, places=3)
         self.assertNotAlmostEqual(unfiltered.exponent, self.expr.exponent, places=3)
+
+
+class TestCommandLineMatchesLibrary(unittest.TestCase):
+    """CLI 自带过一份与库不同的默认值，库层测试抓不到，所以单独跑一次命令行。"""
+
+    @unittest.skipUnless(EXAMPLES.exists(), "example inputs not built")
+    def test_cli_reproduces_the_published_intervals(self) -> None:
+        import subprocess
+        import tempfile
+        pkg_parent = str(Path(technical_floor_path))
+        with tempfile.TemporaryDirectory() as tmp:
+            r = subprocess.run(
+                [sys.executable, "-m", "technical_floor",
+                 "--composition", str(EXAMPLES / "motor_cortex_composition_pairs.csv"),
+                 "--expression", str(EXAMPLES / "motor_cortex_expression_floors.csv"),
+                 "--out", tmp],
+                capture_output=True, text=True,
+                env={**os.environ, "PYTHONPATH": pkg_parent},
+            )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("4.268", r.stdout)
+        self.assertIn("2.976", r.stdout)   # κ 区间下界，论文报 2.98
+        self.assertIn("5.664", r.stdout)   # 上界，论文报 5.66；默认自助次数走偏会变成 5.678
+        self.assertIn("4.58", r.stdout)
+        self.assertIn("-0.497", r.stdout)
 
 
 if __name__ == "__main__":
