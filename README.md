@@ -9,26 +9,38 @@ type, and that accessible regions are linked to genes within that type. This
 repository holds the code that measures the technical floor of all three, using
 donor-matched technical replicates from four cohorts.
 
-## Measure the limits in your own data The floor-estimation procedure is
-packaged as `technical_floor`. Two of the three constants reported in the
-paper do not transfer between datasets, which is precisely why the tool
-exists: what travels is the procedure, not a table of numbers. ```bash python3
--m technical_floor \\ --composition
-data/example_inputs/motor_cortex_composition_pairs.csv \\ --expression
-data/example_inputs/motor_cortex_expression_floors.csv \\ --out results/ ``` It
-takes two tidy CSVs of replicate pairs and returns κ per cell type, the
-expression scaling fit, and the design tables derived from both.
-`technical_floor/README.md` documents the input formats. Requires only `numpy`
-and `pandas`. The example inputs are the paper's own deposited tables, so the
-run above reproduces every published value — which is also the acceptance
-test: ```bash python3 -m unittest tests.test_technical_floor -v # 23 tests ```
-Read `composition_kappa_by_celltype.csv` before the pooled κ. Across cell
-types κ varied 5.6-fold within the primary cohort against 1.1-fold between
-cohorts, and rose with abundance (r = 0.87); because cost scales as κ², that
-is a 31-fold range in required nuclei within one dataset. The pooled value
-describes no individual cell type. The same spread appears in all four
-replicate sets — see
-`supplementary_tables/Supplementary_Table_14_kappa_by_celltype_all_cohorts.csv`. ## What you can reproduce from this repository alone
+## Measure the limits in your own data
+
+The floor-estimation procedure is packaged as `technical_floor`. Two of the three constants
+reported in the paper do not transfer between datasets, which is precisely why the tool exists:
+what travels is the procedure, not a table of numbers.
+
+```bash
+python3 -m technical_floor \
+  --composition data/example_inputs/motor_cortex_composition_pairs.csv \
+  --expression  data/example_inputs/motor_cortex_expression_floors.csv \
+  --out results/
+```
+
+It takes two tidy CSVs of replicate pairs and returns κ per cell type, the expression scaling
+fit, and the design tables derived from both. `technical_floor/README.md` documents the input
+formats. Requires only `numpy` and `pandas`.
+
+The example inputs are the paper's own deposited tables, so the run above reproduces every
+published value — which is also the acceptance test:
+
+```bash
+python3 -m unittest tests.test_technical_floor -v   # 24 tests
+```
+
+Read `composition_kappa_by_celltype.csv` before the pooled κ. Across cell types κ varied
+5.6-fold within the primary cohort against 1.1-fold between cohorts, and rose with abundance
+(r = 0.87); because cost scales as κ², that is a 31-fold range in required nuclei within one
+dataset. The pooled value describes no individual cell type. The same spread appears in all
+four replicate sets — see
+`supplementary_tables/Supplementary_Table_14_kappa_by_celltype_all_cohorts.csv`.
+
+## What you can reproduce from this repository alone
 
 Every figure in the paper regenerates from `data/derived_results/` without
 touching any primary data:

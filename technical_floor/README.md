@@ -87,7 +87,7 @@ expression floor = 4.58 × n^-0.497, 300 observations / 26 donors
 python3 -m unittest tests.test_technical_floor -v
 ```
 
-23 tests. One of them, `test_the_pair_criterion_changes_the_answer`, asserts that skipping
+24 tests. One of them, `test_the_pair_criterion_changes_the_answer`, asserts that skipping
 the minimum-nuclei criterion returns the superseded −0.507 rather than the published
 −0.497 — it exists so that the failure mode cannot come back silently.
 
