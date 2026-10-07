@@ -58,10 +58,11 @@ p1a <- ggplot(grid, aes(Chip, ID, fill = log10(n + 1))) +
   geom_hline(yintercept = nrow(ord) - n_rep + 0.5, colour = C_SEA, linewidth = .6) +
   annotate("text", x = 6.5, y = nrow(ord) - n_rep + 1.6, size = 2.3, colour = C_SEA,
            lineheight = .95, vjust = 0,
-           label = paste0(n_rep, " donors on two chips\n(26 with >=50 nuclei on both)")) +
+           label = paste0("Donor-matched process replicates:\n", n_rep,
+                          " donors on two chips (26 with \u226550 nuclei on both)")) +
   scale_fill_gradient(low = "#F2F7FC", high = C_ULM) +
   scale_x_discrete(labels = function(x) sub("Chip", "", x)) +
-  labs(title = "Donor x chip layout", x = "Chip", y = "Donor (ordered)") +
+  labs(x = "Chip", y = "Donor (ordered)") +
   theme_pub() +
   theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
         axis.text.x = element_text(size = 6.5))
@@ -73,8 +74,9 @@ don <- rd("p5_fig1_donor_table.csv") %>%
   left_join(nchip, by = "ID") %>% left_join(mito, by = "ID") %>%
   mutate(rep = n_chip >= 2)
 # 手稿的四个质量维度：总核数、RNA counts、ATAC fragments、线粒体比例
-dims <- c(n_nuclei = "Nuclei", median_nCount_RNA = "RNA",
-          median_nCount_ATAC = "ATAC", pmito = "Mito %")
+## 按 GB 要求精简到三个与概念信息直接相关的维度，线粒体比例移出主图
+dims <- c(n_nuclei = "Nuclei", median_nCount_RNA = "RNA\ncomplexity",
+          median_nCount_ATAC = "ATAC\ncomplexity")
 qual <- lapply(names(dims), function(v) {
   x <- suppressWarnings(as.numeric(don[[v]]))
   data.frame(dim = dims[[v]], rep = don$rep, val = x / median(x, na.rm = TRUE))
@@ -95,34 +97,55 @@ p1b <- ggplot(qual, aes(dim, val, colour = rep)) +
            colour = "grey25", lineheight = 1,
            label = sprintf("blue = replicated\ngrey = not\nP = %.2f-%.2f",
                            min(pv), max(pv))) +
-  labs(title = "Quality is unbiased", x = NULL, y = "Value / median") +
+  # 顶部留白，否则 Nuclei 列最高的点会压在图例文字上
+  scale_y_continuous(expand = expansion(mult = c(.05, .30))) +
+  labs(x = NULL, y = "Value / median") +
   theme_pub()
 
-lay <- data.frame(
-  lab  = c("L1  Composition", "L2  Expression", "L3  Regulation"),
-  need = c("cell assignment", "aggregated profile", "per-element, per-cell"),
-  fill = c(C_LITE, C_MID, C_ULM),
-  txt  = c(C_ULM, "white", "white"),
-  ymin = c(2.1, 1.1, 0.1)) %>% mutate(ymax = ymin + .8)
+## ---- 1c  三个统计单元的示意图（按 GB 要求重做）------------------------------
+## 要传达的是：同一批数据支持三种断言，各自的统计单元不同，因此分辨率不同。
+box <- data.frame(
+  x    = c(1, 2.5, 4),
+  lab  = c("Composition", "Expression", "Regulation"),
+  unit = c("donor\nproportion", "donor\npseudobulk", "nucleus,\nfeature\ncovariance"),
+  col  = c(L_COMP, L_EXPR, L_REG))
 
-p1d <- ggplot(lay) +
-  geom_rect(aes(xmin = 0, xmax = 1.12, ymin = ymin, ymax = ymax, fill = I(fill))) +
-  geom_text(aes(.06, ymin + .52, label = lab, colour = I(txt)),
-            hjust = 0, size = 2.15, fontface = "bold") +
-  geom_text(aes(.06, ymin + .22, label = need, colour = I(txt)),
-            hjust = 0, size = 1.9) +
-  annotate("segment", x = 1.26, xend = 1.26, y = 2.9, yend = 0.15,
-           arrow = arrow(length = unit(4, "pt"), ends = "last", type = "closed"),
-           colour = "grey45", linewidth = .45) +
-  annotate("text", x = 1.40, y = 1.5, label = "increasing\ndemand", angle = 90,
-           size = 2.1, colour = "grey35", lineheight = 1) +
-  scale_x_continuous(limits = c(0, 1.52)) +
-  scale_y_continuous(limits = c(0, 3.2)) +
-  labs(title = "Three layers") +
+p1d <- ggplot(box) +
+  ## 顶部来源
+  annotate("label", x = 2.5, y = 4.42, label = "Single-nucleus multiome data",
+           size = 2.3, family = BASE_FAMILY, fill = "grey95",
+           label.size = 0, label.padding = unit(2.6, "pt"), colour = "grey15") +
+  ## 分叉
+  annotate("segment", x = 2.5, xend = 2.5, y = 4.18, yend = 3.88,
+           colour = "grey55", linewidth = .4) +
+  annotate("segment", x = 1, xend = 4, y = 3.88, yend = 3.88,
+           colour = "grey55", linewidth = .4) +
+  annotate("segment", x = box$x, xend = box$x, y = 3.88, yend = 3.52,
+           colour = "grey55", linewidth = .4,
+           arrow = arrow(length = unit(3, "pt"), type = "closed")) +
+  ## 三个断言
+  geom_label(aes(x, 3.26, label = lab, fill = I(col)), colour = "white",
+             size = 2.15, fontface = "bold", family = BASE_FAMILY,
+             label.size = 0, label.padding = unit(2.2, "pt")) +
+  ## 到统计单元
+  annotate("segment", x = box$x, xend = box$x, y = 3.0, yend = 2.62,
+           colour = "grey55", linewidth = .4,
+           arrow = arrow(length = unit(3, "pt"), type = "closed")) +
+  geom_text(aes(x, 2.22, label = unit, colour = I(col)),
+            size = 2.05, family = BASE_FAMILY, lineheight = .95) +
+  ## 结论
+  annotate("segment", x = .5, xend = 4.5, y = 1.62, yend = 1.62,
+           colour = "grey75", linewidth = .35) +
+  annotate("text", x = 2.5, y = 1.3, size = 2.35, colour = "grey15",
+           family = BASE_FAMILY, lineheight = 1.05,
+           label = "Different statistical units\n\u2192 different resolution limits") +
+  scale_x_continuous(limits = c(0.3, 4.7)) +
+  scale_y_continuous(limits = c(0.95, 4.68)) +
   theme_blank()
 
+
 fig1 <- p1a + p1b + p1d +
-  plot_layout(widths = c(1.15, 1, 0.95)) +
+  plot_layout(widths = c(1.1, 0.9, 1.15)) +
   plot_annotation(tag_levels = "a")
 save_fig(fig1, OUT, "Fig1_resource", height = 68)
 
@@ -138,13 +161,15 @@ nsub <- cells %>% count(celltype, name = "n") %>% arrange(desc(n)) %>%
 p4a <- ggplot(nsub, aes(i, n)) +
   geom_col(fill = C_ULM, width = .85) +
   geom_hline(yintercept = 150, linetype = "22", linewidth = .4, colour = "grey20") +
-  annotate("text", x = nrow(nsub) / 2, y = 162, size = 2.2, colour = "grey20",
-           label = "150 nuclei per subtype") +
-  annotate("text", x = .5, y = 118, hjust = 0, size = 2.0, colour = "white",
-           lineheight = 1, label = "depth ratio 1.0000\nno nucleus below target") +
-  scale_y_continuous(limits = c(0, 190), expand = expansion(mult = c(0, .02))) +
-  labs(title = "Equalised design", y = "Nuclei",
-       x = paste0(nrow(nsub), " neuronal subtypes")) +
+  annotate("text", x = nrow(nsub) / 2, y = 157, size = 2.05, colour = "grey25",
+           family = BASE_FAMILY, label = "150 nuclei per subtype") +
+  scale_y_continuous(limits = c(0, 228), expand = expansion(mult = c(0, .02))) +
+  # QC 文字一律放到柱体之外，避免白字压在柱间空隙上不可读
+  ann(x = .5, y = 226, hjust = 0, size = 2.0, colour = "grey30",
+      lab = paste("Test: equalised nucleus design",
+                  "(reference link sets at full depth)",
+                  "depth ratio 1.0000, no nucleus below target", sep = "\n")) +
+  labs(y = "Nuclei", x = paste0(nrow(nsub), " neuronal subtypes")) +
   theme_pub() +
   theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
 
@@ -164,60 +189,33 @@ p4b <- ggplot(pk, aes(i, median_nuclei_per_peak)) +
            label = sprintf("%.0f%% of peaks seen in one nucleus",
                            100 * median(pk$frac_peaks_in_1_nucleus))) +
   scale_y_continuous(limits = c(0.8, 8.2), breaks = c(1, 2, 4, 6, 8)) +
-  labs(title = "Peaks are seen in ~2 nuclei",
-       x = "Neuronal subtypes", y = "Nuclei per detected peak") +
+  ann(x = 1, y = 8.1, lab = "Sparse detection", size = 2.5, colour = "grey15") +
+  labs(x = "Neuronal subtypes", y = "Nuclei per detected peak") +
   theme_pub() +
   theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
 
 # c: 实测 OR —— 显著耗竭（正文引 Fig. 4c）
 orv <- data.frame(or = 0.663, lo = 0.568, hi = 0.768)
 p4c <- ggplot(orv) +
-  geom_col(aes(1, or), fill = C_SEA, width = .3) +
-  geom_errorbar(aes(1, ymin = lo, ymax = hi), width = .09, linewidth = .5,
-                colour = "grey20") +
+  geom_errorbar(aes(1, ymin = lo, ymax = hi), width = .06, linewidth = .5,
+                colour = C_SEA) +
+  geom_point(aes(1, or), colour = C_SEA, size = 2.6) +
   geom_hline(yintercept = 1, linetype = "22", linewidth = .45, colour = "grey20") +
-  annotate("text", x = 1.26, y = 0.663, hjust = .5, size = 2.3, colour = C_SEA,
-           label = "0.663 [0.568, 0.768]") +
+  annotate("text", x = 1.22, y = 0.663, hjust = .5, size = 2.3, colour = C_SEA,
+           family = BASE_FAMILY, lineheight = 1,
+           label = "0.663\n[0.568, 0.768]") +
   annotate("text", x = .72, y = 0.04, hjust = 0, size = 2.0, colour = "grey30",
-           lineheight = 1, label = "significant depletion,\nnot absence of signal") +
+           family = BASE_FAMILY, lineheight = 1,
+           label = "reduced recovery,\nnot absence of regulation") +
   coord_flip(xlim = c(.6, 1.45), ylim = c(0, 1.3)) +
-  labs(title = "Observed: depletion", x = NULL, y = "Odds ratio") +
+  labs(x = NULL, y = "Promoter-enrichment odds ratio") +
   theme_pub() +
   theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
 
-# d: 功效曲线（正文引 Fig. 4d）
-p0     <- 0.0095
-n_test <- 3.03e6
-n_obs  <- 33227
-pw <- lapply(c(3.0, 2.0, 1.5), function(orr) {
-  nl <- 10^seq(2, 5, length.out = 160)
-  p1 <- orr * p0 / (1 - p0 + orr * p0)
-  se <- sqrt(p1 * (1 - p1) / nl + p0 * (1 - p0) / n_test)
-  data.frame(nl = nl, z = (p1 - p0) / se, or = factor(orr, levels = c(3, 2, 1.5)))
-}) %>% bind_rows()
-ztar <- c(`3` = 9.0, `2` = 6.2, `1.5` = 3.6)
-tip <- pw %>% group_by(or) %>%
-  slice_min(abs(z - ztar[as.character(or)]), n = 1) %>% ungroup()
 
-p4d <- ggplot(pw, aes(nl, z, colour = or)) +
-  geom_line(linewidth = .8) +
-  geom_hline(yintercept = 1.96, linetype = "22", linewidth = .4, colour = "grey20") +
-  geom_vline(xintercept = n_obs, colour = C_SEA, linewidth = .8) +
-  geom_text(data = tip, aes(nl, z, label = paste("OR", or), colour = or),
-            hjust = 1.15, vjust = -0.35, size = 2.0, show.legend = FALSE) +
-  annotate("text", x = 120, y = 2.4, hjust = 0, size = 2.0, colour = "grey30",
-           label = "P = 0.05") +
-  annotate("text", x = n_obs * 1.25, y = 1.0, hjust = 0, size = 2.0, colour = C_SEA,
-           lineheight = 1, label = "33,227\nlinks") +
-  scale_colour_manual(values = c(`3` = C_LITE, `2` = C_MID, `1.5` = C_ULM)) +
-  scale_x_log10(breaks = 10^(2:5), labels = trans_format("log10", math_format(10^.x))) +
-  scale_y_continuous(expand = expansion(mult = c(0, .02))) +
-  coord_cartesian(ylim = c(0, 11)) +
-  labs(title = "Power was ample", x = "Detected links", y = "Detection z-score") +
-  theme_pub()
-
-fig4 <- p4a + p4b + p4c + p4d +
-  plot_layout(widths = c(.95, 1.15, .95, 1.1)) + plot_annotation(tag_levels = "a")
+## 检出 z 分析按 GB 要求移到补充图（SuppFig6），主图保留三个面板
+fig4 <- p4a + p4b + p4c +
+  plot_layout(widths = c(1, 1.2, .95)) + plot_annotation(tag_levels = "a")
 save_fig(fig4, OUT, "Fig4_regulatory_floor", height = 68)
 
 ## ======================================================================
@@ -243,22 +241,31 @@ or_sets <- bind_rows(
 p5a <- ggplot(or_sets, aes(or, lab, colour = dep)) +
   annotate("rect", xmin = 2.26, xmax = 3.56, ymin = -Inf, ymax = Inf,
            fill = C_ULM, alpha = .07) +   # 四个参照 link 集的实际区间
+  # 本研究的工作点单独加底色条，按 GB 要求在面板内直接突出
+  # 注意：x 为 log10 标度，-Inf/Inf 会变成 NaN 而整块被丢弃，必须给有限边界
+  annotate("rect", xmin = .451, xmax = 8.95, ymin = .42, ymax = 1.5,
+           fill = C_SEA, alpha = .10) +
   geom_vline(xintercept = 1, linetype = "22", linewidth = .45, colour = "grey20") +
   geom_linerange(aes(xmin = lo, xmax = hi), linewidth = .9) +
   geom_point(size = 1.5) +
-  geom_text(aes(x = hi * 1.09, label = sprintf("%.2f", or)), hjust = 0, size = 2.2) +
+  geom_text(aes(x = hi * 1.13, label = sprintf("%.2f", or)), hjust = 0, size = 2.2) +
+  ann(x = .465, y = 1.42, lab = "operating point", size = 2.1, colour = C_SEA,
+      hjust = 0, vjust = .5) +
+  ann(x = 2.84, y = 5.42, lab = "reference range", size = 2.1, colour = C_ULM,
+      hjust = .5, vjust = .5) +
   scale_colour_manual(values = c(`TRUE` = C_SEA, `FALSE` = C_ULM)) +
   scale_x_log10(limits = c(.45, 9), breaks = c(.5, 1, 2, 5),
                 labels = c("0.5", "1", "2", "5")) +
-  labs(title = "Reference range across link sets", y = NULL,
+  scale_y_discrete(expand = expansion(add = c(.6, .9))) +
+  labs(y = NULL,
        x = "Promoter-enrichment odds ratio (log scale)") +
   theme_pub() +
   theme(axis.text.y = element_text(size = 6.5))
 
 # 同一个 link 集 (human_brain_3k) 在三个窗口下的 OR，由 p5_15 --window 重算，
 # 背景集与检出集同步收紧（见 code/analysis/p5_19_recompute_refs_at_window.sh）。
-win <- data.frame(w = factor(c("+/-500 kb", "+/-1 Mb", "+/-1.7 Mb"),
-                             levels = c("+/-500 kb", "+/-1 Mb", "+/-1.7 Mb")),
+win <- data.frame(w = factor(c("\u00b1500 kb", "\u00b11 Mb", "\u00b11.7 Mb"),
+                             levels = c("\u00b1500 kb", "\u00b11 Mb", "\u00b11.7 Mb")),
                   or = c(3.558, 4.054, 6.593))
 p5b <- ggplot(win, aes(w, or, fill = w)) +
   geom_col(width = .55) +
@@ -266,9 +273,9 @@ p5b <- ggplot(win, aes(w, or, fill = w)) +
             colour = "grey15") +
   scale_fill_manual(values = c(C_ULM, C_MID, C_LITE)) +
   scale_y_continuous(limits = c(0, 7.6), expand = expansion(mult = c(0, .02))) +
-  scale_x_discrete(labels = c("+/-500 kb" = "+/-500\nkb", "+/-1 Mb" = "+/-1\nMb",
-                              "+/-1.7 Mb" = "+/-1.7\nMb")) +
-  labs(title = "Window matters", x = NULL, y = "Odds ratio, same link set") +
+  scale_x_discrete(labels = c("\u00b1500 kb" = "\u00b1500\nkb", "\u00b11 Mb" = "\u00b11\nMb",
+                              "\u00b11.7 Mb" = "\u00b11.7\nMb")) +
+  labs(x = NULL, y = "Odds ratio, same link set") +
   theme_pub() +
   theme(axis.text.x = element_text(size = 6.8))
 
@@ -289,8 +296,8 @@ p5c <- ggplot(lib, aes(x, link)) +
   scale_y_log10(labels = trans_format("log10", math_format(10^.x))) +
   annotation_logticks(sides = "bl", size = .25, short = unit(1, "pt"),
                       mid = unit(1.6, "pt"), long = unit(2.4, "pt")) +
-  labs(title = "No saturation",
-       x = "Nuclei x fragments per nucleus", y = "Feature linkages detected") +
+  labs(
+       x = "Nuclei \u00d7 fragments per nucleus", y = "Feature linkages detected") +
   theme_pub()
 
 fig5 <- p5a + p5b + p5c +

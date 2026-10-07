@@ -73,14 +73,15 @@ p2a <- ggplot(L2, aes(x, y, colour = cohort)) +
   geom_point(alpha = .13, size = .5, stroke = 0, show.legend = FALSE) +
   geom_line(data = pow_guide(25, 2.6), aes(x, y), inherit.aes = FALSE,
             colour = "grey55", linetype = "22", linewidth = .4) +
-  annotate("text", x = 25 * 3.4, y = 2.6 * (3.4)^-0.5 * 1.5,
-           label = "n^{-1/2}", parse = TRUE, size = 2.4, colour = "grey45") +
+  annotate("text", x = 25 * 7, y = 2.6 * (7)^-0.5 * 0.80,
+           label = "slope \u22121/2", size = 2.4, colour = "grey45",
+           family = BASE_FAMILY) +
   geom_line(data = f2a_fit, aes(x, y, colour = cohort), linewidth = .85) +
   geom_text(data = f2a_leg, aes(x, y, label = lab, colour = cohort),
             hjust = 0, size = 2.35, show.legend = FALSE) +
   annotate("text", x = xr[2] * .92, y = 4.2, hjust = 1, vjust = 1, size = 2.5,
            colour = "grey25", lineheight = .95,
-           label = "parallel:\nsame slope,\ndifferent intercept") +
+           label = "Same scaling exponent,\ndataset-specific magnitude") +
   scale_colour_manual(values = COH) +
   scale_x_log10(limits = xr, breaks = 10^(0:4),
                 labels = trans_format("log10", math_format(10^.x))) +
@@ -88,7 +89,7 @@ p2a <- ggplot(L2, aes(x, y, colour = cohort)) +
                 labels = trans_format("log10", math_format(10^.x))) +
   annotation_logticks(sides = "bl", size = .25,
                       short = unit(1, "pt"), mid = unit(1.6, "pt"), long = unit(2.4, "pt")) +
-  labs(title = "Expression layer", x = expression("Effective number of nuclei ("*italic(n)[eff]*")"),
+  labs(x = expression("Effective number of nuclei ("*italic(n)[eff]*")"),
        y = "Expression floor") +
   theme_pub()
 
@@ -97,13 +98,14 @@ p2b <- ggplot(L1, aes(x, y, colour = cohort)) +
   geom_line(data = pow_guide(60, 3e-3, span = 1.5), aes(x, y), inherit.aes = FALSE,
             colour = "grey55", linetype = "22", linewidth = .4) +
   annotate("text", x = 60 * 3.2, y = 3e-3 * (3.2)^-0.5 * 2.0,
-           label = "n^{-1/2}", parse = TRUE, size = 2.4, colour = "grey45") +
+           label = "slope \u22121/2", size = 2.4, colour = "grey45",
+           family = BASE_FAMILY) +
   geom_line(data = f2b_fit, aes(x, y, colour = cohort), linewidth = .85) +
   geom_text(data = f2b_leg, aes(x, y, label = lab, colour = cohort),
             hjust = 0, size = 2.35, show.legend = FALSE) +
   annotate("text", x = xr[2] * .92, y = 2.2, hjust = 1, vjust = 1, size = 2.5,
            colour = "grey25", lineheight = .95,
-           label = "divergent:\nslopes differ") +
+           label = "Divergent scaling") +
   scale_colour_manual(values = COH) +
   scale_x_log10(limits = xr, breaks = 10^(0:4),
                 labels = trans_format("log10", math_format(10^.x))) +
@@ -111,8 +113,7 @@ p2b <- ggplot(L1, aes(x, y, colour = cohort)) +
                 labels = trans_format("log10", math_format(10^.x))) +
   annotation_logticks(sides = "bl", size = .25,
                       short = unit(1, "pt"), mid = unit(1.6, "pt"), long = unit(2.4, "pt")) +
-  labs(title = "Composition layer",
-       x = expression("Effective number of nuclei ("*italic(n)[eff]*")"),
+  labs(       x = expression("Effective number of nuclei ("*italic(n)[eff]*")"),
        y = "Composition discrepancy") +
   theme_pub()
 
@@ -125,21 +126,25 @@ od <- read_csv(file.path(DR_REPO, "p5_17_B7_cohort_overdispersion.csv"),
             grp = c("incl. tissue + dissociation", "incl. separate sample",
                     "loading / library only", "loading / library only")[
                       match(cohort, lv)])
-p2c <- ggplot(od, aes(cohort, od, fill = grp)) +
+# 柱色按队列固定，与 a/b 面板一致；重复所跨步骤改用柱内 / 括号直标
+p2c <- ggplot(od, aes(cohort, od, fill = cohort)) +
   geom_col(width = .62) +
   geom_hline(yintercept = 1, linetype = "22", linewidth = .4, colour = "grey20") +
   geom_text(aes(label = sprintf("%.2f", od)), vjust = -0.6, size = 2.5,
             colour = "grey15") +
+  annotate("text", x = 1, y = .25, angle = 90, hjust = 0, vjust = .5,
+           size = 2.0, colour = "white", label = "incl. tissue + dissociation") +
+  annotate("text", x = 2, y = .25, angle = 90, hjust = 0, vjust = .5,
+           size = 2.0, colour = "white", label = "incl. separate sample") +
   annotate("segment", x = 2.62, xend = 4.38, y = 1.78, yend = 1.78,
            colour = "grey45", linewidth = .35) +
   annotate("text", x = 3.5, y = 1.83, vjust = 0, size = 2.0, colour = "grey35",
            label = "loading / library only") +
-  scale_fill_manual(values = c(`incl. tissue + dissociation` = C_ULM,
-                               `incl. separate sample` = C_MID,
-                               `loading / library only` = C_LITE)) +
+  scale_fill_manual(values = c(`Motor cortex` = C_ULM, `Seattle atlas` = C_SEA,
+                               `PsychAD MSSM` = C_PSY, `PsychAD RADC` = C_EXT)) +
   scale_x_discrete(labels = c("Motor\ncortex", "Seattle\natlas", "PsychAD\nMSSM", "PsychAD\nRADC")) +
   scale_y_continuous(limits = c(0, 4.85), expand = expansion(mult = c(0, .02))) +
-  labs(title = "Overdispersion", x = NULL,
+  labs(x = NULL,
        y = "Composition overdispersion") +
   theme_pub() +
   theme(axis.text.x = element_text(size = 6.4))
@@ -175,8 +180,9 @@ p3a <- ggplot(f3dat, aes(x, y, colour = set)) +
                 labels = trans_format("log10", math_format(10^.x))) +
   annotation_logticks(sides = "bl", size = .25,
                       short = unit(1, "pt"), mid = unit(1.6, "pt"), long = unit(2.4, "pt")) +
-  labs(title = "Observed vs sampling null",
-       x = expression("Effective number of nuclei ("*italic(n)[eff]*")"),
+  ann(x = max(f3dat$x) * .85, y = 2.8,
+      lab = "Observed \u2248 sampling expectation", hjust = 1, size = 2.5) +
+  labs(x = expression("Effective number of nuclei ("*italic(n)[eff]*")"),
        y = "Expression floor") +
   theme_pub()
 
@@ -188,12 +194,14 @@ p3b <- ggplot(ratio, aes(r)) +
   geom_histogram(bins = 46, fill = C_SEA, colour = NA, alpha = .85) +
   geom_vline(xintercept = 1, linetype = "22", linewidth = .4, colour = "grey20") +
   geom_vline(xintercept = med, colour = C_ULM, linewidth = .55) +
-  annotate("text", x = med * 1.06, y = Inf, vjust = 1.45, hjust = 0, size = 2.5,
-           colour = C_ULM, lineheight = .95,
-           label = sprintf("median\n%.2f-fold", med)) +
+  ## 中位线标注放在分布主体内（峰高的 ~60%），而不是顶边或底边
+  annotate("label", x = med * 1.15, y = max(hist(ratio$r, breaks = 46, plot = FALSE)$counts) * 0.62,
+           size = 2.5, hjust = 0,
+           colour = C_ULM, fill = "white", label.size = 0, label.padding = unit(1.6, "pt"),
+           family = BASE_FAMILY,
+           label = sprintf("median %.2f-fold", med)) +
   scale_y_continuous(expand = expansion(mult = c(0, .06))) +
-  labs(title = "Excess over pure sampling",
-       x = "Observed / null floor, per pair", y = "Pairs") +
+  labs(       x = "Observed / null floor, per pair", y = "Pairs") +
   theme_pub()
 
 byct <- byct %>%
@@ -201,19 +209,26 @@ byct <- byct %>%
          wide = span >= quantile(span, .80))
 med_b <- median(byct$b)
 
+## 只给最陡与最平的各三个细胞类型直标；轴标签会把相邻三行挤在一起，完整名单在补充表
+lab6 <- byct %>%
+  filter(ct %in% levels(ct)[c(1:3, (nlevels(ct) - 2):nlevels(ct))])
+
 p3c <- ggplot(byct, aes(b, ct)) +
   geom_vline(xintercept = -0.5, linetype = "22", linewidth = .4, colour = "grey20") +
   geom_vline(xintercept = med_b, colour = C_ULM, linewidth = .5, alpha = .65) +
   geom_point(aes(size = wide, colour = wide)) +
   scale_size_manual(values = c(`FALSE` = 1.25, `TRUE` = 2.5)) +
   scale_colour_manual(values = c(`FALSE` = C_SEA, `TRUE` = C_ULM)) +
+  geom_text(data = lab6, aes(b, ct, label = ct), inherit.aes = FALSE,
+            hjust = 1, nudge_x = -0.013, size = 2.0, colour = "grey25",
+            family = BASE_FAMILY) +
   annotate("text", x = -0.30, y = 2.2, hjust = 1, vjust = 0, size = 2.3,
            colour = "grey25", lineheight = 1,
            label = sprintf("median %.3f\nlarge = widest range in\neffective nucleus number", med_b)) +
-  labs(title = "Not driven by abundance",
-       x = "Within-cell-type exponent", y = NULL) +
+  scale_x_continuous(expand = expansion(mult = c(.26, .05))) +
+  labs(x = "Within-cell-type exponent", y = NULL) +
   theme_pub() +
-  theme(axis.text.y = element_text(size = 6.2))
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
 
 fig3 <- p3a + p3b + p3c + plot_layout(widths = c(1, 1, 1.05)) +
   plot_annotation(tag_levels = "a")

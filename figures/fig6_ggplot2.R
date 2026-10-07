@@ -1,127 +1,92 @@
-# Fig 6 · 三层推断的分辨率极限，放在同一根「每细胞类型核数」轴上
+#!/usr/bin/env Rscript
+# Fig 6 · 框架图：分辨率由断言的统计单元决定。
 # 用法: Rscript fig6_ggplot2.R <derived_results_dir> <out_dir>
+#
+# 按 Genome Biology 的要求重做：这张图是概念核心，不再是三组互不相干的曲线。
+#   a  生物学问题 → 统计单元 → 分辨率估计量 → 实验需求
+#   b  三类断言各自的统计单元与分辨率量
+#   c  三者在同一条「每细胞类型核数」轴上的紧凑对照（不画全部曲线）
 args <- commandArgs(trailingOnly = TRUE)
-DR  <- if (length(args) >= 1) args[1] else "data/derived_results"
-OUT <- if (length(args) >= 2) args[2] else "figures"
-source(file.path(dirname(sub("^--file=", "", grep("^--file=", commandArgs(FALSE),
-      value = TRUE)[1])), "fig_common.R"))
-dir.create(OUT, showWarnings = FALSE, recursive = TRUE)
+OUT  <- ifelse(length(args) >= 2, args[2], "figures")
+source(file.path(dirname(sub("--file=", "", grep("--file=", commandArgs(), value = TRUE)[1])),
+                 "fig_common.R"))
 
-## ---- a. 调控层：两个队列的核数梯队 ------------------------------------------
-mh_pool <- function(df, by) {
-  df |>
-    mutate(a = prox_links, b = n_links - prox_links,
-           cc = prox_tested_all, d = n_tested_all - prox_tested_all,
-           tot = a + b + cc + d,
-           R = a * d / tot, S = b * cc / tot,
-           P = (a + d) / tot, Q = (b + cc) / tot) |>
-    group_by(across(all_of(by))) |>
-    summarise(Rs = sum(R), Ss = sum(S), PR = sum(P * R), PS = sum(P * S),
-              QR = sum(Q * R), QS = sum(Q * S), .groups = "drop") |>
-    mutate(OR = Rs / Ss,
-           se = sqrt(PR / (2 * Rs^2) + (PS + QR) / (2 * Rs * Ss) + QS / (2 * Ss^2)),
-           lo = OR * exp(-1.96 * se), hi = OR * exp(1.96 * se))
-}
+## ---- a  流程 ---------------------------------------------------------------
+step <- data.frame(
+  y   = c(4, 3, 2, 1),
+  lab = c("Biological question", "Statistical unit",
+          "Resolution estimator", "Experimental requirement"),
+  eg  = c("does this cell type change?", "donor proportion",
+          "overdispersion (\u03ba)", "nuclei per cell type"))
 
-pri <- read_csv(file.path(DR, "primary_L3_nucleus_ladder.csv"), show_col_types = FALSE) |>
-  mh_pool("n") |> mutate(cohort = "Primary (motor cortex)")
-ext <- read_csv(file.path(DR, "nabec_L3_nucleus_ladder.csv"), show_col_types = FALSE) |>
-  mh_pool("n") |> mutate(cohort = "External (prefrontal cortex)")
-lad <- bind_rows(pri, ext) |>
-  mutate(cohort = factor(cohort, levels = c("Primary (motor cortex)",
-                                            "External (prefrontal cortex)")))
-COHC <- c("Primary (motor cortex)" = C_ULM, "External (prefrontal cortex)" = C_SEA)
+pa <- ggplot(step) +
+  geom_label(aes(1, y, label = lab), fill = "grey95", colour = "grey10",
+             size = 2.4, fontface = "bold", family = BASE_FAMILY,
+             label.size = 0, label.padding = unit(3, "pt")) +
+  geom_text(aes(1, y - 0.33, label = eg), colour = "grey40",
+            size = 2.0, family = BASE_FAMILY, fontface = "italic") +
+  annotate("segment", x = 1, xend = 1, y = step$y[-4] - 0.46, yend = step$y[-1] + 0.2,
+           colour = "grey55", linewidth = .45,
+           arrow = arrow(length = unit(3.2, "pt"), type = "closed")) +
+  scale_x_continuous(limits = c(0.3, 1.7)) +
+  scale_y_continuous(limits = c(0.55, 4.45)) +
+  labs(tag = "a") +
+  theme_blank()
 
-pa <- ggplot(lad, aes(n, OR, colour = cohort)) +
-  annotate("rect", xmin = 130, xmax = 9000, ymin = 2.26, ymax = 3.56,
-           fill = C_LITE, alpha = .3) +
-  annotate("text", x = 158, y = 3.15, label = "full-depth link sets",
-           hjust = 0, size = 2.3, colour = C_ULM) +
-  geom_hline(yintercept = 1, linetype = "22", linewidth = .35, colour = "grey45") +
-  geom_vline(xintercept = 150, linewidth = .3, colour = "grey55") +
-  geom_line(linewidth = .5) +
-  geom_linerange(aes(ymin = lo, ymax = hi), linewidth = .4) +
-  geom_point(size = 1.4) +
-  annotate("text", x = 150, y = 11.5, label = "equalised\ndesign", hjust = -0.1,
-           vjust = 1, size = 2.3, colour = "grey35", lineheight = .95) +
-  scale_colour_manual(values = COHC) +
-  scale_x_log10(limits = c(130, 9000), breaks = c(150, 400, 900, 2400, 7500),
-                labels = label_comma(accuracy = 1)) +
-  scale_y_log10(breaks = c(.5, 1, 2, 4, 8), labels = c("0.5", "1", "2", "4", "8")) +
-  labs(tag = "a", title = "Regulatory: promoter enrichment",
-       x = "nuclei per cell type", y = "enrichment odds ratio") +
+## ---- b  三类断言的对照表 ----------------------------------------------------
+tab <- data.frame(
+  y    = c(3, 2, 1),
+  claim = c("Composition", "Expression", "Regulation"),
+  unit  = c("donor", "donor pseudobulk", "nucleus + method"),
+  meas  = c("\u03ba", "sampling floor", "promoter enrichment"),
+  col   = c(L_COMP, L_EXPR, L_REG))
+
+pb <- ggplot(tab) +
+  annotate("segment", x = 0.04, xend = 4.85, y = 3.52, yend = 3.52,
+           colour = "grey35", linewidth = .4) +
+  annotate("text", x = c(0.04, 1.58, 3.22), y = 3.74, hjust = 0, size = 1.95,
+           colour = "grey25", fontface = "bold", family = BASE_FAMILY,
+           label = c("Biological claim", "Statistical unit", "Resolution measure")) +
+  geom_text(aes(0.04, y, label = claim, colour = I(col)), hjust = 0,
+            size = 2.05, fontface = "bold", family = BASE_FAMILY) +
+  geom_text(aes(1.58, y, label = unit), hjust = 0, colour = "grey25",
+            size = 2.05, family = BASE_FAMILY) +
+  geom_text(aes(3.22, y, label = meas), hjust = 0, colour = "grey25",
+            size = 2.05, family = BASE_FAMILY) +
+  annotate("segment", x = 0.04, xend = 4.85, y = 0.6, yend = 0.6,
+           colour = "grey75", linewidth = .3) +
+  scale_x_continuous(limits = c(0, 4.90)) +
+  scale_y_continuous(limits = c(0.5, 3.95)) +
+  labs(tag = "b") +
+  theme_blank()
+
+## ---- c  同一轴上的紧凑对照 --------------------------------------------------
+## 只标各层的操作区间，不画任何曲线。数值全部取自正文。
+band <- data.frame(
+  layer = factor(c("Expression", "Composition", "Regulation"),
+                 levels = c("Regulation", "Composition", "Expression")),
+  lo    = c(17,     44435,  400),
+  hi    = c(91,    499575, 5000),
+  mid   = c(39,    125949,  900),
+  note  = c("measured support, median effective n = 39",
+            "1 percentage point at measured \u03ba",
+            "promoter-enrichment transition"),
+  col   = c(L_EXPR, L_COMP, L_REG))
+
+pc <- ggplot(band, aes(y = layer, colour = I(col))) +
+  geom_linerange(aes(xmin = lo, xmax = hi), linewidth = 2.6, alpha = .32) +
+  geom_point(aes(x = mid), size = 2.2) +
+  geom_text(aes(x = sqrt(lo * hi), label = note, hjust = c(0, 1, 0.5)),
+            vjust = -1.6, size = 1.95, family = BASE_FAMILY, colour = "grey30") +
+  scale_x_log10(limits = c(10, 1.1e6),
+                breaks = c(10, 100, 1000, 10000, 1e5, 1e6),
+                labels = c("10", "100", "1,000", "10,000", expression(10^5), expression(10^6))) +
+  annotation_logticks(sides = "b", size = .25,
+                      short = unit(1, "pt"), mid = unit(1.6, "pt"), long = unit(2.4, "pt")) +
+  labs(tag = "c", x = "Nuclei per cell type", y = NULL) +
   theme_pub() +
-  theme(legend.position = c(.97, .03), legend.justification = c(1, 0),
-        legend.title = element_blank(), legend.text = element_text(size = 6.2),
-        legend.key.width = unit(11, "pt"))
+  theme(axis.text.y = element_text(size = 7.2, colour = "grey15"))
 
-## ---- b. 表达层：下限对核数 --------------------------------------------------
-# 50 核配对准则同样管表达层：ALS26 第二块芯片只有 37 个核，不合格
-ex <- read_csv(file.path(DR, "p5_floor_scaling_pairs.csv"), show_col_types = FALSE) |>
-  filter(donor != "ALS26") |>
-  filter(median_abs_log2FC > 0, n_eff > 0)
-cfe  <- coef(lm(log(median_abs_log2FC) ~ log(n_eff), data = ex))
-linee <- tibble(n = exp(seq(log(8), log(2000), length.out = 100))) |>
-  mutate(f = exp(cfe[1] + cfe[2] * log(n)))
-
-pb <- ggplot(ex, aes(n_eff, median_abs_log2FC)) +
-  geom_point(size = .5, alpha = .28, colour = C_GREY) +
-  geom_line(data = linee, aes(n, f), colour = C_ULM, linewidth = .5, inherit.aes = FALSE) +
-  scale_x_log10(breaks = c(10, 50, 200, 1000), labels = label_comma(accuracy = 1)) +
-  scale_y_log10(breaks = c(.1, .25, .5, 1, 2)) +
-  labs(tag = "b", title = "Expression: technical-noise threshold",
-       x = "effective nuclei per cell type",
-       y = "threshold, absolute log2 fold change") +
-  annotate("text", x = 11, y = .13, hjust = 0, size = 2.5, colour = C_ULM,
-           label = sprintf("floor = %.2f n^%.3f", exp(cfe[1]), cfe[2])) +
-  theme_pub()
-
-## ---- c. 组成层：最小可检测差异 ----------------------------------------------
-kap <- read_csv(file.path(DR, "p5_17_B7_cohort_overdispersion.csv"),
-                show_col_types = FALSE)
-k_sea <- round(kap$kappa[kap$cohort == "Seattle atlas"], 2)
-k_mc  <- round(kap$kappa[kap$cohort == "Motor cortex"], 2)
-gridc <- expand.grid(N = 10^seq(log10(2e3), log10(2e6), length.out = 80),
-                     kappa = c(1, k_sea, k_mc)) |>
-  mutate(F = 100 * 1.96 * kappa * sqrt(.1 * .9) * sqrt(2 / N),
-         lab = factor(kappa, levels = c(1, k_sea, k_mc),
-                      labels = c("kappa = 1 (multinomial)",
-                                 sprintf("kappa = %.2f (Seattle)", k_sea),
-                                 sprintf("kappa = %.2f (motor cortex)", k_mc))))
-pc <- ggplot(gridc, aes(N, F, colour = lab, linetype = lab)) +
-  geom_line(linewidth = .5) +
-  geom_hline(yintercept = 1, linetype = "22", linewidth = .35, colour = "grey45") +
-  scale_colour_manual(values = c(C_NULL, C_SEA, C_ULM)) +
-  scale_linetype_manual(values = c("42", "solid", "solid")) +
-  scale_x_log10(breaks = c(1e4, 1e5, 1e6), labels = c("10k", "100k", "1M")) +
-  scale_y_log10(breaks = c(.1, .3, 1, 3, 10)) +
-  labs(tag = "c", title = "Composition: technical-noise threshold",
-       x = "nuclei per group",
-       y = "threshold, percentage points") +
-  theme_pub() +
-  theme(legend.position = c(.03, .06), legend.justification = c(0, 0),
-        legend.title = element_blank(), legend.text = element_text(size = 6.4),
-        legend.key.width = unit(13, "pt"))
-
-fig <- (pa | pb | pc) + plot_layout(widths = c(1.12, 1, 1.02))
-agg_png(file.path(OUT, "Fig6_resolution_limits.png"), width = 180, height = 64,
-        units = "mm", res = 450); print(fig); invisible(dev.off())
-pdf(file.path(OUT, "Fig6_resolution_limits.pdf"), width = 180/25.4, height = 64/25.4)
-print(fig); invisible(dev.off())
-
-cross <- function(d, t) {
-  d <- d[order(d$n), ]
-  out <- NA_real_
-  for (i in seq_len(nrow(d) - 1)) {          # 取最后一次上穿（曲线可非单调）
-    if (d$OR[i] < t && d$OR[i + 1] >= t) {
-      b <- log(d$OR[i + 1] / d$OR[i]) / log(d$n[i + 1] / d$n[i])
-      out <- exp(log(d$n[i]) + log(t / d$OR[i]) / b)
-    }
-  }
-  out
-}
-for (co in levels(lad$cohort)) {
-  d <- lad[lad$cohort == co, ]
-  cat(sprintf("%-30s OR=1 at n=%.0f;  OR=2.26 at n=%.0f\n", co, cross(d, 1), cross(d, 2.26)))
-}
-cat(sprintf("expression exponent %.3f\n", cfe[2]))
+fig <- (pa | pb | pc) + plot_layout(widths = c(0.72, 1.18, 1.18))
+save_fig(fig, OUT, "Fig6_resolution_limits", width = 180, height = 62)
+cat("Fig6: framework (flow / claim table / common axis)\n")
