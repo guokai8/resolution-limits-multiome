@@ -66,8 +66,8 @@ asked to resolve).
 
 ## Worked example
 
-The paper's own deposited tables are in `data/example_inputs/`. Running on them reproduces
-every published number, which is also the acceptance test:
+The paper's own per-pair tables are deposited as Supplementary Tables 2, 3 and 10. Running
+the tool on them reproduces every published number:
 
 ```
 κ = 4.268 (95% CI 2.98–5.66), 300 pairs / 26 donors
@@ -81,15 +81,13 @@ expression floor = 4.58 × n^-0.497, 300 observations / 26 donors
   |log2FC| threshold 0.93 at n=25 … 0.15 at n=1,000
 ```
 
-## Tests
+## A failure mode worth knowing about
 
-```bash
-python3 -m unittest tests.test_technical_floor -v
-```
-
-24 tests. One of them, `test_the_pair_criterion_changes_the_answer`, asserts that skipping
-the minimum-nuclei criterion returns the superseded −0.507 rather than the published
-−0.497 — it exists so that the failure mode cannot come back silently.
+The minimum-nuclei pairing criterion governs the expression layer as well as the
+composition layer. Skipping it returns the superseded exponent −0.507 rather than the
+published −0.497. `apply_pair_criterion` is therefore called from both branches of the
+command-line entry point, and warns loudly when the input lacks the per-library nucleus
+counts it needs.
 
 ## What this does not do
 

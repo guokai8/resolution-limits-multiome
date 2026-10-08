@@ -3,19 +3,16 @@ out/
 results/
 results_methods/
 
-# 中间产物不入库，但保留发表版图件
+# this repository holds scripts only; no rendered output
 *.png
 *.pdf
-!figures/output/*.png
-!figures/output/*.pdf
 
-# primary data (never commit; see data/DATA_SOURCES.md)
+# primary data and derived tables are never committed here
 *.h5ad
 *.mtx
 *.tsv.gz
 *.gtf.gz
 *.npz
-data/raw/
 
 # python
 __pycache__/
