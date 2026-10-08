@@ -1,32 +1,38 @@
 #!/usr/bin/env python3
 """
-P5 基础对象 · 30 GB ATAC / 9.4 GB RNA 矩阵的流式伪批量
-=======================================================
-单次顺序扫描 MatrixMarket 文件，按 (供体 × 细胞类型) 分组累加，
-不把完整稀疏矩阵读进内存。
+Streaming pseudobulk over the 30 GB ATAC and 9.4 GB RNA matrices
+================================================================
+One sequential pass over each MatrixMarket file, accumulating by
+(donor x cell type), without ever holding the full sparse matrix in memory.
 
-内存占用 = features × groups × 8 bytes：
-    ATAC  200,791 peaks × ~948 groups ≈ 1.5 GB
-    RNA    35,367 genes × ~948 groups ≈ 0.27 GB
-外加分块缓冲约 2–3 GB。整体 < 6 GB，普通工作站可跑。
+Memory is features x groups x 8 bytes:
+    ATAC  200,791 peaks x ~948 groups = 1.5 GB
+    RNA    35,367 genes x ~948 groups = 0.27 GB
+plus 2-3 GB of chunk buffers. Under 6 GB in total, which an ordinary
+workstation can run.
 
-⚠️  RNA 矩阵含约 13% 的**显式 0** 条目（writeMM 的产物）。本脚本会丢弃它们，
-    并在日志中报告丢弃数——若这个比例与预期不符，说明文件格式理解有误，必须停下。
+The RNA matrix carries about 13% EXPLICIT ZERO entries, an artefact of how it
+was written. They are discarded here and the count is logged: if that fraction
+does not match expectation, the file format has been misread and the run should
+stop rather than produce a quietly wrong answer.
 
-⚠️  RNA 与 ATAC 的 barcodes.tsv 已核实逐字节相同，因此列索引可共用同一份
-    cell→group 映射。脚本仍会重新校验，不一致即中止。
+The RNA and ATAC barcodes.tsv files were verified byte-identical, so one
+cell-to-group mapping serves both column indices. The script re-checks this
+anyway and aborts on any mismatch.
 
-用法：
-  # 冒烟测试（只读前 500 万行，约 20 秒）
+Usage:
+  # smoke test: first 5 million lines, about 20 seconds
   python3 p5_01_pseudobulk_stream.py --data DIR --out out/ --modality RNA --max-lines 5000000
 
-  # 正式运行
+  # full run
   python3 p5_01_pseudobulk_stream.py --data DIR --out out/ --modality RNA
   python3 p5_01_pseudobulk_stream.py --data DIR --out out/ --modality ATAC
 
-输出：
-  out/pseudobulk_{RNA,ATAC}_{level}.npz    counts (features × groups), 附 group/feature 名
-  out/pseudobulk_{...}_groupinfo.csv       每组的 供体/细胞类型/细胞数/总计数
+Outputs:
+  out/pseudobulk_{RNA,ATAC}_{level}.npz    counts (features x groups), with group
+                                           and feature names
+  out/pseudobulk_{...}_groupinfo.csv       donor, cell type, nuclei and total
+                                           counts per group
 """
 
 import argparse
@@ -44,13 +50,15 @@ CHUNK_ROWS = 20_000_000          # 每次读入的 mtx 行数
 
 
 def load_cell_groups(data_dir, level, modality, group_extra=None):
-    """返回 (group_of_col[int32, n_cells], group_names[list], donors, celltypes)"""
-    # ⚠️ 全程用 pandas Index 做集合运算。不要用 np.setdiff1d / np.unique：
-    #    在 object-dtype 的字符串数组上它们会退化到极慢的路径（实测挂死）。
+    """Returns (group_of_col[int32, n_cells], group_names[list], donors, celltypes)."""
+    # Use pandas Index for every set operation here. np.setdiff1d and
+    # np.unique fall onto a pathologically slow path for object-dtype string
+    # arrays -- slow enough to look like a hang.
     bc_file = os.path.join(data_dir, f"Multiome_Dataset_{modality}_barcodes.tsv")
     barcodes = pd.Index(pd.read_csv(bc_file, header=None)[0])
 
-    # 交叉校验：两个模态的 barcode 必须完全一致，否则列索引不可共用
+    # Cross-check: the two modalities' barcodes must match exactly, or the
+    # column indices cannot share one mapping.
     other = "ATAC" if modality == "RNA" else "RNA"
     other_file = os.path.join(data_dir, f"Multiome_Dataset_{other}_barcodes.tsv")
     if os.path.exists(other_file):
@@ -73,7 +81,7 @@ def load_cell_groups(data_dir, level, modality, group_extra=None):
         sys.exit(f"[FATAL] {len(missing)} 个 barcode 在元数据中找不到。停止。")
 
     meta = meta.reindex(barcodes)
-    # 分组键：供体 || [额外键] || 细胞类型
+    # Group key: donor || [extra keys] || cell type
     key = meta["ID"].astype(str)
     if group_extra:
         key = key + "||" + meta[group_extra].astype(str)
@@ -88,21 +96,25 @@ def stream_pseudobulk(mtx_path, group_of_col, n_groups, max_lines=None,
                       group_subset=None, chunk_rows=CHUNK_ROWS,
                       ckpt_path=None, time_budget=None):
     """
-    顺序扫描 mtx，返回 (features × groups) int32 计数矩阵。
+    Scan the mtx sequentially, returning a (features x groups) int32 matrix.
 
-    内存要点（血泪教训：3 GB 机器上 np.bincount 路线直接 OOM 被杀）：
-      * 累加器用 **int32** 而非 int64 —— ATAC 每组总计数约 2e6，远低于 2^31
-      * 每个分块先 np.unique 合并重复的 (feature, group) 键，再散射累加。
-        临时数组只有**分块大小**，而不是 (n_feat × n_groups) 全长。
-        对整个全长调用 np.bincount 会每块分配一个与累加器等大的 float64
-        临时数组，直接翻倍内存 —— 实测在 3 GB 机器上被 OOM killer 干掉。
-        （纯 numpy 实现，不依赖 scipy）
-      * group_subset 允许一次只累加一部分组，用多趟扫描换内存
+    The memory choices here were all forced by an actual out-of-memory kill on
+    a 3 GB machine:
 
-    ATAC 全量所需内存：200,791 × 935 × 4 B ≈ 0.75 GB（累加器）
-                        + 同等大小的稠密临时 ≈ 0.75 GB
-                        + 分块缓冲 ≈ 0.5 GB   →  约 2.0–2.5 GB
-    若机器内存 < 4 GB，用 --group-chunks N 分 N 趟。
+      * the accumulator is INT32, not int64. ATAC totals about 2e6 counts per
+        group, far below 2^31.
+      * each chunk merges duplicate (feature, group) keys with np.unique before
+        scattering. Temporaries are then CHUNK-sized rather than
+        (n_feat x n_groups)-sized. Calling np.bincount over the full length
+        instead allocates a float64 temporary as large as the accumulator on
+        every chunk, doubling peak memory -- which is exactly what the OOM
+        killer caught. Pure numpy, no scipy dependency.
+      * group_subset accumulates only part of the groups, trading extra passes
+        over the file for lower memory.
+
+    ATAC at full size: 200,791 x 935 x 4 B = 0.75 GB accumulator, a dense
+    temporary of the same size, and about 0.5 GB of chunk buffers -- roughly
+    2.0-2.5 GB. Below 4 GB of RAM, split into N passes with --group-chunks N.
     """
     opener = gzip.open if mtx_path.endswith(".gz") else open
     with opener(mtx_path, "rt") as fh:
@@ -117,7 +129,7 @@ def stream_pseudobulk(mtx_path, group_of_col, n_groups, max_lines=None,
         if n_cell != len(group_of_col):
             sys.exit(f"[FATAL] mtx 列数 {n_cell} ≠ barcode 数 {len(group_of_col)}")
 
-        # group_subset: 本趟只累加这些全局组编号；其余行丢弃
+        # group_subset: accumulate only these global group ids this pass
         if group_subset is None:
             keep_mask = None
             n_out_groups = n_groups
@@ -132,10 +144,12 @@ def stream_pseudobulk(mtx_path, group_of_col, n_groups, max_lines=None,
 
         data_start = fh.tell()
 
-        # ---- 断点续跑 ----------------------------------------------------
-        # 自己按**字节块**读，再交给 pandas 的 C 解析器。这样 fh.tell() 是可靠的，
-        # 可以把字节偏移量存进检查点，下次 seek 回来继续。
-        # （直接用 pd.read_csv(chunksize=) 迭代时 tell() 因缓冲而不可靠。）
+        # ---- Resumable -------------------------------------------------
+        # Read BYTE blocks by hand and hand them to pandas' C parser, rather
+        # than iterating pd.read_csv(chunksize=). That keeps fh.tell() reliable,
+        # so a byte offset can go into the checkpoint and the next run can seek
+        # back to it. Iterating read_csv buffers internally and tell() is then
+        # meaningless.
         out = np.zeros((n_feat, n_out_groups), dtype=np.int32)
         seen = 0
         n_zero_dropped = 0
@@ -179,8 +193,9 @@ def stream_pseudobulk(mtx_path, group_of_col, n_groups, max_lines=None,
             if keep_mask is not None:
                 sel = keep_mask[g]
                 r, v, g = r[sel], v[sel], local_of_global[g[sel]]
-            # 合并分块内重复的 (feature, group) 键后散射累加。
-            # 临时数组均为分块大小，与累加器规模无关。
+            # Merge duplicate (feature, group) keys within the chunk, then
+            # scatter. Temporaries stay chunk-sized, independent of the
+            # accumulator.
             flat = r.astype(np.int64) * n_out_groups + g.astype(np.int64)
             uniq, inv = np.unique(flat, return_inverse=True)
             sums = np.bincount(inv, weights=v.astype(np.float64),
@@ -195,7 +210,7 @@ def stream_pseudobulk(mtx_path, group_of_col, n_groups, max_lines=None,
                       f"({100*seen/nnz:5.1f}%)  {el/60:.1f} min", flush=True)
             if max_lines is not None and seen >= max_lines:
                 break
-            # 时间预算用尽 → 存检查点后退出（退出码 3 = "请再调用我一次"）
+            # Budget exhausted: checkpoint and exit 3, meaning "call me again"
             if time_budget and el > time_budget and ckpt_path:
                 np.savez(ckpt_path, out=out, seen=seen, offset=fh.tell(),
                          n_zero_dropped=n_zero_dropped,
@@ -205,7 +220,7 @@ def stream_pseudobulk(mtx_path, group_of_col, n_groups, max_lines=None,
                       flush=True)
                 sys.exit(3)
 
-    # 每组细胞数（与矩阵无关，直接从映射算）
+    # Nuclei per group, computed from the mapping alone -- no matrix needed
     n_cells_per_group = np.bincount(group_of_col, minlength=n_groups)
 
     print(f"  扫描完成: {seen:,} entries, 丢弃显式 0 共 {n_zero_dropped:,} "
@@ -265,9 +280,10 @@ def main():
                                    max_lines=args.max_lines,
                                    chunk_rows=args.chunk_rows,
                                    ckpt_path=ck, time_budget=args.time_budget)
-        # 完成后清理检查点。⚠️ 在 iCloud / 网络盘上 os.remove 可能抛
-        # PermissionError —— 那时结果其实已经算完写好了，绝不能因为清理失败
-        # 而让整个任务以非零码退出（否则会诱使人重跑 10 分钟的扫描）。
+        # Clean up the checkpoint. On iCloud or a network drive os.remove can
+        # raise PermissionError -- at which point the results are already
+        # computed and written. Failing the whole job over a failed cleanup
+        # would invite someone to re-run a ten-minute scan for nothing.
         if os.path.exists(ck):
             try:
                 os.remove(ck)
@@ -308,8 +324,10 @@ def main():
         "n_cells": ncells,
         "total_counts": mat.sum(0),
     })
-    # ⚠️ total_counts 是后续所有"功效均衡"的依据：论文自己承认 DEG 数与
-    #    reads 数强相关，任何跨细胞类型的效应量比较都必须先在这一列上匹配或降采样。
+    # total_counts is what every later power-balancing step rests on. The
+    # source paper concedes that DEG counts correlate strongly with read counts,
+    # so any comparison of effect size across cell types has to match or
+    # downsample on this column first.
     info.to_csv(os.path.join(args.out, f"pseudobulk_{tag}_groupinfo.csv"),
                 index=False)
     print(f"[done] {args.out}/pseudobulk_{tag}.npz  "

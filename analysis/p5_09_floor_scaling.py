@@ -1,27 +1,31 @@
 #!/usr/bin/env python3
 """
-P5 · 噪声下限的标度律：能否从细胞数预测下限？
-================================================
-这是把"我们测了这一套数据的下限"升级为"**给定细胞数可预测下限**"的一步——
-决定这项工作是一个数据点还是一把别人能用的尺子。
+Scaling of the noise floor: can the floor be predicted from nucleus count?
+=========================================================================
+This is the step that turns "we measured a floor in this dataset" into "the
+floor at a given nucleus count is predictable" -- the difference between one
+data point and a ruler someone else can use.
 
-核心问题：技术噪声下限随每个细胞类型的细胞数如何变化？
+The question: how does the technical noise floor vary with the number of nuclei
+in a cell type?
 
-    floor(n) = a · n^b
+    floor(n) = a * n^b
 
-  b ≈ −0.5  → 纯多项抽样噪声：**多测细胞就能解决**
-  b ≈  0    → 纯批次效应：**多测细胞没用**，必须改实验设计
-  −0.5<b<0  → 二者混合，存在**不可约的批次分量**
+  b ~ -0.5      pure multinomial sampling noise: collecting more nuclei fixes it
+  b ~  0        pure batch effect: more nuclei does NOT help, the design must change
+  -0.5 < b < 0  a mixture, with an irreducible batch component
 
-后者若成立，是比"下限是多少"更重要的结论：
-它意味着单纯堆细胞数**无法**把细胞类型内的表达结论做可靠。
+If the third case holds, that matters more than the value of the floor itself:
+it means piling on nuclei cannot make within-cell-type expression conclusions
+reliable, however many you collect.
 
-做法：以 (供体 × 芯片对 × 细胞类型) 为观测单位，
-用两块芯片细胞数的**调和平均**作为有效细胞数 n_eff，
-拟合 log(floor) ~ log(n_eff)，用**按供体的 bootstrap** 给斜率 CI
-（同一供体的多个细胞类型不独立）。
+Method: the unit of observation is (donor x chip pair x cell type). Effective
+nucleus count n_eff is the HARMONIC mean of the two chips' counts, because the
+variance of a paired difference goes as 1/n1 + 1/n2. Fit log(floor) on
+log(n_eff), with the slope interval from a bootstrap clustered BY DONOR, since
+the several cell types of one donor are not independent.
 
-用法：
+Usage:
   python3 p5_09_floor_scaling.py --data DIR --out results
 """
 
@@ -52,13 +56,18 @@ def attach_cell_counts(pairs, data_dir, level="WNN_L2.5"):
     p = p.merge(n.rename(columns={"Chip": "chip2", "n": "n2"}),
                 on=["donor", "chip2", "celltype"], how="left")
     p = p.dropna(subset=["n1", "n2"])
-    # 有效细胞数：调和平均（配对差异的方差 ∝ 1/n1 + 1/n2）
+    # Effective nucleus count is the harmonic mean, because the variance of the
+    # paired difference goes as 1/n1 + 1/n2 -- the smaller library dominates.
     p["n_eff"] = 2.0 / (1.0 / p.n1 + 1.0 / p.n2)
     return p
 
 
 def fit_loglog(x, y, groups, n_boot=2000, seed=0):
-    """OLS on log-log，按 groups（供体）做 bootstrap。返回 slope/intercept 与 CI。"""
+    """OLS in log-log space, bootstrapped over `groups` (donors).
+
+    Returns slope and intercept with confidence intervals. Resampling donors
+    rather than observations is what keeps the interval honest.
+    """
     lx, ly = np.log(x), np.log(y)
     A = np.vstack([lx, np.ones_like(lx)]).T
     beta = np.linalg.lstsq(A, ly, rcond=None)[0]
@@ -121,7 +130,7 @@ def main():
         need = np.exp((np.log(tgt) - loga) / b)
         print(f"  {tgt:>12.2f}{need:>14,.0f}")
 
-    # 每个细胞类型的观测 vs 预测
+    # Observed against predicted, per cell type, as a fit diagnostic
     p["pred"] = np.exp(loga) * p.n_eff ** b
     s = p.groupby("celltype").agg(n_pairs=("n_eff", "size"),
                                   n_eff=("n_eff", "median"),

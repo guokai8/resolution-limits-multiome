@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Layer 3 的外部复现：NABEC/HBCC 前额叶多组学（Catching et al. Cell Rep 2026）。
+"""External replication of Layer 3 in the NABEC/HBCC prefrontal cortex
+multiome resource (Catching et al., Cell Rep 2026).
 
-口径照 p5_08 / p5_15：
-  等化基质：每种细胞类型取 n 个核，均超过共同深度阈值，再多项式降采样到该深度
-  连接：基因 TSS ±500 kb 内的 peak，Pearson 相关，细胞类型内统一 BH FDR<0.05
-  启动子邻近：|peak 中点 − TSS| ≤ 3 kb
-  富集 OR：检出 link 中近端/远端 的比数，比检验集中同一比数，Haldane–Anscombe 校正
+Conventions follow p5_08 and p5_15 exactly:
+  equalised substrate   n nuclei per cell type, all above a common depth
+                        threshold, then multinomially downsampled to it
+  linking               peaks within +/-500 kb of a gene TSS, Pearson
+                        correlation, one BH FDR < 0.05 across the cell type
+  promoter proximity    |peak midpoint - TSS| <= 3 kb
+  enrichment            odds of proximal among detected links against the same
+                        odds among tested pairs, Haldane-Anscombe corrected
 
-⚠️ 与原队列的关键差别：这里每种细胞类型有数万到数十万个核，因此可以【扫 n】，
-   把「150 个核时失败」推广为「到多少个核才不失败」。
+What this cohort adds that the primary one cannot: each cell type here has tens
+to hundreds of thousands of nuclei, so n can be SWEPT. That turns "the design
+fails at 150 nuclei" into "here is the nucleus number at which it stops
+failing", which is the quantity the paper actually needs.
 """
 from __future__ import annotations
 import argparse, json, logging, time
@@ -28,7 +34,11 @@ def var_index(f):
     v = f["var"]; return np.asarray(v[v.attrs.get("_index", "_index")][:]).astype(str)
 
 def read_rows(path, key, rows, ncol):
-    """按行号取稀疏子矩阵（行号需升序）。"""
+    """Read a sparse sub-matrix by row index. Rows must be ascending.
+
+    Reads only the requested rows from the HDF5 CSR arrays rather than loading
+    the matrix, which is what makes a hundred-thousand-nucleus cell type usable.
+    """
     with h5py.File(path, "r") as f:
         ip = f[f"{key}/indptr"]; dat = f[f"{key}/data"]; idx = f[f"{key}/indices"]
         ptr = ip[:]
@@ -43,7 +53,7 @@ def read_rows(path, key, rows, ncol):
                          shape=(len(rows), ncol))
 
 def downsample(M, target, rng):
-    """按行多项式降采样到 target 总计数。"""
+    """Multinomially downsample each row to `target` total counts."""
     M = M.tocsr().astype(np.float64)
     for i in range(M.shape[0]):
         s, e = M.indptr[i], M.indptr[i+1]
@@ -53,7 +63,9 @@ def downsample(M, target, rng):
     M.eliminate_zeros(); return M
 
 def bh_threshold(p, q, m_extra=0):
-    """BH 阈值。m_extra 为额外的 p=1 检验数（零方差 peak），只进分母。"""
+    """BH threshold. m_extra counts zero-variance peaks, which enter the
+    denominator only -- they were never testable, but excluding them from the
+    correction would make the threshold depend on depth."""
     p = np.sort(p[np.isfinite(p)]); m = p.size + int(m_extra)
     if p.size == 0: return -1.0
     ok = p <= q*np.arange(1, p.size+1)/m
@@ -103,9 +115,12 @@ def main():
     sel = np.flatnonzero((rna_ct == a.celltype) & (amap >= 0))
     logger.info("%s: %d 个核可用", a.celltype, sel.size)
 
-    # 共同深度阈值：取该类型中第 n 大的深度（ATAC 与 RNA 各自），选满足两者的核
+    # Common depth threshold: the nth largest depth in this cell type, taken
+    # separately for ATAC and RNA, keeping only nuclei that clear both.
     af = atac_frag[amap[sel]]; rt = rna_tot[sel]
-    # 两个阈值必须【联合】满足：按同一分位数放松，取仍能凑够 n 个核的最严分位
+    # The two thresholds have to hold JOINTLY, and the nth largest ATAC nucleus
+    # is usually not the nth largest RNA one. So both are relaxed along the same
+    # quantile until n nuclei clear both, and the strictest such quantile wins.
     lo, hi = 0.0, 1.0
     for _ in range(40):
         q = (lo + hi) / 2
@@ -139,7 +154,9 @@ def main():
     pv["chrom"] = spl[0]; pv["mid"] = ((spl[1].astype(float)+spl[2].astype(float))//2)
     pv["i"] = np.arange(len(pv)); pv = pv.dropna()
 
-    # 相关用稀疏矩阵向量积算，避免把 n × 521k 的 ATAC 展开成稠密（大 n 会爆内存）
+    # Correlations via sparse matrix-vector products. Densifying the n x 521k
+    # ATAC block would exhaust memory at the larger nucleus numbers, which are
+    # precisely the ones this cohort exists to reach.
     n = pick.size
     A = A.tocsc()
     pmean = np.asarray(A.sum(0)).ravel() / n
@@ -205,9 +222,12 @@ def main():
             bs = rng.binomial(a_+b_, (a_+.5)/(a_+b_+1), 2000)
             ci = np.percentile(((bs+.5)*(d_+.5))/((a_+b_-bs+.5)*(c_+.5)), [2.5, 97.5])
             return float(o), float(ci[0]), float(ci[1])
-        # 口径 A（与原队列 p5_15 一致）：检验集 = 窗口内全部 (peak, TSS) 对
+        # Convention A, matching the primary cohort's p5_15: the background is
+        # every (peak, TSS) pair in the window.
         oA = OR(prox_all, n_all - prox_all)
-        # 口径 B：仅计入非零方差 peak，即理论上可被检出的对
+        # Convention B: count only non-zero-variance peaks, i.e. the pairs that
+        # could in principle have been detected at this depth. Both are reported
+        # because the choice moves the odds ratio about twofold.
         oB = OR(prox_tested, n_tested - prox_tested)
         res = dict(celltype=a.celltype, n=int(n), depth_atac=float(ta), depth_rna=float(tr),
                    n_tested_all=int(n_all), prox_tested_all=int(prox_all),

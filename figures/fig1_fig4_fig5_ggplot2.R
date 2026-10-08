@@ -1,24 +1,30 @@
 #!/usr/bin/env Rscript
-# Fig 1、Fig 4、Fig 5 重绘（ggplot2），风格与 Fig 2/3 统一
+# Figures 1, 4 and 5. Same house style as fig2_fig3_ggplot2.R.
 #
-# Fig 1  资源与设计
-#   a  供体 × 芯片排布，跨芯片重复的 27 人排在上方
-#   b  重复 vs 非重复供体的质量维度（各维度除以中位数后同轴）
-#   c  公开脑单核资源的系统检索：四套皆不合格
-#   d  三层推断的递增需求
+# Figure 1  The resource and the design.
+#   a  Donor-by-chip layout; the 27 donors that appear on two chips sit above
+#      the rule, and those pairs are the process replicates the paper rests on.
+#   b  Three quality dimensions, replicated against non-replicated donors, each
+#      divided by its own median so the three share one axis.
+#   c  The three inference layers and the statistical unit each one is defined
+#      on. This is the schematic that sets up the whole paper.
 #
-# Fig 4  L3 下限
-#   a  等化设计（25 个亚型各 150 核）
-#   b  每基因独立 link 数：主变量在所有亚型恒为 0
-#   c  功效曲线：33,227 条 link 足以检出任何合理幅度的富集
-#   d  实测 OR 显著 < 1（富集的反面）
+# Figure 4  What peak-gene inference returns at an attainable nucleus number.
+#   a  The equalised substrate: 150 nuclei for each of 25 neuronal subtypes.
+#   b  How many nuclei a detected peak is seen in -- the sparsity that drives
+#      the result.
+#   c  The observed promoter-enrichment odds ratio, significantly below one.
+#   (The detection-power panel moved to Supplementary Figure 6.)
 #
-# Fig 5  诊断的参考区间
-#   a  六个 link 集的 OR 森林图
-#   b  窗口敏感性
-#   c  SEA-AD 28 个 multiome 文库：linkage 未饱和
+# Figure 5  The diagnostic's reference range.
+#   a  Odds ratios across external link sets, with this study's operating point.
+#   b  The same link set scored over three analysis windows.
+#   c  Feature linkages against library size: no plateau.
 #
-# 用法： Rscript fig1_fig4_fig5_ggplot2.R [results_dir] [out_dir] [meta_dir]
+# Usage: Rscript fig1_fig4_fig5_ggplot2.R [results_dir] [out_dir] [meta_dir]
+#
+# Unlike Figures 2, 3, 6 and 7 these panels need the primary cohort's donor
+# metadata, which is not redistributed here.
 
 args <- commandArgs(trailingOnly = TRUE)
 RES  <- path.expand(if (length(args) >= 1) args[1] else "~/Desktop/P5_VulnerableEpigenome/results")
@@ -32,12 +38,19 @@ dir.create(OUT, showWarnings = FALSE, recursive = TRUE)
 rd <- function(f) read_csv(file.path(RES, f), show_col_types = FALSE)
 
 ## ======================================================================
-## Fig 1
+## Figure 1
 ## ======================================================================
+## quote = "" and comment.char = "" because donor metadata fields contain
+## apostrophes and hash characters that would otherwise truncate rows.
 meta <- read.delim(file.path(META, "Multiome_Dataset_Metadata.txt"),
                    colClasses = "character", quote = "", comment.char = "")
+## A chip is the 10x run; wells within a chip share the loading and the library
+## prep, so "same chip" and "different chip" are what separate the two kinds of
+## replicate the paper distinguishes.
 meta$Chip <- sub("Well[0-9]+$", "", meta$Well)
 
+## Order donors by how many chips they appear on, then by total nuclei, so the
+## replicated donors form a solid block at the top of the heatmap.
 cc <- meta %>% count(ID, Chip, name = "n")
 nchip <- cc %>% count(ID, name = "n_chip")
 ord <- nchip %>%
@@ -45,16 +58,22 @@ ord <- nchip %>%
   arrange(desc(n_chip), desc(tot))
 n_rep <- sum(ord$n_chip >= 2)
 
+## Expand to the full donor x chip grid so that absent combinations are drawn
+## as empty cells rather than omitted.
 grid <- expand.grid(ID = ord$ID, Chip = sort(unique(meta$Chip)),
                     stringsAsFactors = FALSE) %>%
   left_join(cc, by = c("ID", "Chip")) %>%
   mutate(n = tidyr::replace_na(n, 0),
          ID = factor(ID, levels = rev(ord$ID)),
+         ## Sort chips numerically: a plain sort puts Chip10 before Chip2.
          Chip = factor(Chip, levels = paste0("Chip", sort(as.integer(
            sub("Chip", "", unique(meta$Chip)))))))
 
 p1a <- ggplot(grid, aes(Chip, ID, fill = log10(n + 1))) +
   geom_tile() +
+  ## The rule separates replicated from non-replicated donors. 27 donors are on
+  ## two chips; 26 of those clear the 50-nucleus floor on both and are the pairs
+  ## every downstream estimate uses.
   geom_hline(yintercept = nrow(ord) - n_rep + 0.5, colour = C_SEA, linewidth = .6) +
   annotate("text", x = 6.5, y = nrow(ord) - n_rep + 1.6, size = 2.3, colour = C_SEA,
            lineheight = .95, vjust = 0,
@@ -73,8 +92,11 @@ mito <- meta %>%
 don <- rd("p5_fig1_donor_table.csv") %>%
   left_join(nchip, by = "ID") %>% left_join(mito, by = "ID") %>%
   mutate(rep = n_chip >= 2)
-# 手稿的四个质量维度：总核数、RNA counts、ATAC fragments、线粒体比例
-## 按 GB 要求精简到三个与概念信息直接相关的维度，线粒体比例移出主图
+
+## Panel b asks one question: are the replicated donors a biased subset? The
+## answer is what matters, not the breadth of the QC panel, so the figure keeps
+## the three dimensions that bear on it and drops mitochondrial fraction.
+## Each dimension is divided by its own median so all three share one axis.
 dims <- c(n_nuclei = "Nuclei", median_nCount_RNA = "RNA\ncomplexity",
           median_nCount_ATAC = "ATAC\ncomplexity")
 qual <- lapply(names(dims), function(v) {
@@ -83,12 +105,14 @@ qual <- lapply(names(dims), function(v) {
 }) %>% bind_rows() %>% filter(is.finite(val), !is.na(rep)) %>%
   mutate(dim = factor(dim, levels = unname(dims)))
 
+## Two-sided Wilcoxon per dimension. The panel reports the range of the three
+## P values rather than three separate numbers.
 pv <- sapply(names(dims), function(v) {
   x <- suppressWarnings(as.numeric(don[[v]]))
   suppressWarnings(wilcox.test(x[don$rep], x[!don$rep])$p.value)
 })
 
-set.seed(0)
+set.seed(0)   # the jitter is cosmetic, but fixing it keeps the panel reproducible
 p1b <- ggplot(qual, aes(dim, val, colour = rep)) +
   geom_point(position = position_jitterdodge(jitter.width = .22, dodge.width = .55),
              size = .75, alpha = .75, stroke = 0) +
@@ -97,13 +121,15 @@ p1b <- ggplot(qual, aes(dim, val, colour = rep)) +
            colour = "grey25", lineheight = 1,
            label = sprintf("blue = replicated\ngrey = not\nP = %.2f-%.2f",
                            min(pv), max(pv))) +
-  # 顶部留白，否则 Nuclei 列最高的点会压在图例文字上
+  ## Headroom, or the tallest point in the Nuclei column lands on the legend.
   scale_y_continuous(expand = expansion(mult = c(.05, .30))) +
   labs(x = NULL, y = "Value / median") +
   theme_pub()
 
-## ---- 1c  三个统计单元的示意图（按 GB 要求重做）------------------------------
-## 要传达的是：同一批数据支持三种断言，各自的统计单元不同，因此分辨率不同。
+## ---- 1c  The statistical-unit schematic ------------------------------------
+## The message: one set of nuclei supports three kinds of claim, each defined on
+## a different statistical unit, and therefore each with its own resolution.
+## Drawn by hand on a blank canvas rather than built from data.
 box <- data.frame(
   x    = c(1, 2.5, 4),
   lab  = c("Composition", "Expression", "Regulation"),
@@ -111,11 +137,11 @@ box <- data.frame(
   col  = c(L_COMP, L_EXPR, L_REG))
 
 p1d <- ggplot(box) +
-  ## 顶部来源
+  ## The shared source at the top.
   annotate("label", x = 2.5, y = 4.42, label = "Single-nucleus multiome data",
            size = 2.3, family = BASE_FAMILY, fill = "grey95",
            label.size = 0, label.padding = unit(2.6, "pt"), colour = "grey15") +
-  ## 分叉
+  ## The branch: one stem, one crossbar, three arrows down.
   annotate("segment", x = 2.5, xend = 2.5, y = 4.18, yend = 3.88,
            colour = "grey55", linewidth = .4) +
   annotate("segment", x = 1, xend = 4, y = 3.88, yend = 3.88,
@@ -123,17 +149,17 @@ p1d <- ggplot(box) +
   annotate("segment", x = box$x, xend = box$x, y = 3.88, yend = 3.52,
            colour = "grey55", linewidth = .4,
            arrow = arrow(length = unit(3, "pt"), type = "closed")) +
-  ## 三个断言
+  ## The three claims, in the layer colours used throughout.
   geom_label(aes(x, 3.26, label = lab, fill = I(col)), colour = "white",
              size = 2.15, fontface = "bold", family = BASE_FAMILY,
              label.size = 0, label.padding = unit(2.2, "pt")) +
-  ## 到统计单元
+  ## Down to the statistical unit each claim is defined on.
   annotate("segment", x = box$x, xend = box$x, y = 3.0, yend = 2.62,
            colour = "grey55", linewidth = .4,
            arrow = arrow(length = unit(3, "pt"), type = "closed")) +
   geom_text(aes(x, 2.22, label = unit, colour = I(col)),
             size = 2.05, family = BASE_FAMILY, lineheight = .95) +
-  ## 结论
+  ## And the conclusion the rest of the paper measures.
   annotate("segment", x = .5, xend = 4.5, y = 1.62, yend = 1.62,
            colour = "grey75", linewidth = .35) +
   annotate("text", x = 2.5, y = 1.3, size = 2.35, colour = "grey15",
@@ -150,7 +176,7 @@ fig1 <- p1a + p1b + p1d +
 save_fig(fig1, OUT, "Fig1_resource", height = 68)
 
 ## ======================================================================
-## Fig 4
+## Figure 4
 ## ======================================================================
 cells <- rd("A2_cells_seed0.csv")
 fe    <- rd("p5_claimA_features.csv")
@@ -158,13 +184,16 @@ fe    <- rd("p5_claimA_features.csv")
 nsub <- cells %>% count(celltype, name = "n") %>% arrange(desc(n)) %>%
   mutate(i = row_number())
 
+## Panel a: the substrate. Every bar is 150 by construction; the panel exists to
+## show that the comparison is equalised, so the QC statements sit above the
+## bars rather than inside them -- white text on the gaps between bars is
+## unreadable at print size.
 p4a <- ggplot(nsub, aes(i, n)) +
   geom_col(fill = C_ULM, width = .85) +
   geom_hline(yintercept = 150, linetype = "22", linewidth = .4, colour = "grey20") +
   annotate("text", x = nrow(nsub) / 2, y = 157, size = 2.05, colour = "grey25",
            family = BASE_FAMILY, label = "150 nuclei per subtype") +
   scale_y_continuous(limits = c(0, 228), expand = expansion(mult = c(0, .02))) +
-  # QC 文字一律放到柱体之外，避免白字压在柱间空隙上不可读
   ann(x = .5, y = 226, hjust = 0, size = 2.0, colour = "grey30",
       lab = paste("Test: equalised nucleus design",
                   "(reference link sets at full depth)",
@@ -173,7 +202,9 @@ p4a <- ggplot(nsub, aes(i, n)) +
   theme_pub() +
   theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
 
-# b: 每个 peak 在该亚型 150 个核中被检出的数量（中位，逐亚型）
+## Panel b: in how many of a subtype's 150 nuclei is a detected peak actually
+## observed? Points are subtype medians, bars the interquartile range. This is
+## the sparsity that makes single-nucleus correlation unreliable here.
 pk <- rd("panel_b_nuclei_per_peak_by_subtype.csv") %>%
   arrange(median_nuclei_per_peak) %>% mutate(i = row_number())
 med_pk <- median(pk$median_nuclei_per_peak)
@@ -194,13 +225,18 @@ p4b <- ggplot(pk, aes(i, median_nuclei_per_peak)) +
   theme_pub() +
   theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
 
-# c: 实测 OR —— 显著耗竭（正文引 Fig. 4c）
+## Panel c: the measured odds ratio. Written in as a literal because it is the
+## single headline number of the layer, quoted identically in the abstract, the
+## Results and Supplementary Table 11; it is produced by p5_08.
+## Depletion, not absence: the links recovered carry less positional structure
+## than the background, which is what sparsity predicts.
 orv <- data.frame(or = 0.663, lo = 0.568, hi = 0.768)
 p4c <- ggplot(orv) +
   geom_errorbar(aes(1, ymin = lo, ymax = hi), width = .06, linewidth = .5,
                 colour = C_SEA) +
   geom_point(aes(1, or), colour = C_SEA, size = 2.6) +
   geom_hline(yintercept = 1, linetype = "22", linewidth = .45, colour = "grey20") +
+  ## Two lines, not one: on one line the label runs into the panel border.
   annotate("text", x = 1.22, y = 0.663, hjust = .5, size = 2.3, colour = C_SEA,
            family = BASE_FAMILY, lineheight = 1,
            label = "0.663\n[0.568, 0.768]") +
@@ -213,36 +249,38 @@ p4c <- ggplot(orv) +
   theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
 
 
-## 检出 z 分析按 GB 要求移到补充图（SuppFig6），主图保留三个面板
 fig4 <- p4a + p4b + p4c +
   plot_layout(widths = c(1, 1.2, .95)) + plot_annotation(tag_levels = "a")
 save_fig(fig4, OUT, "Fig4_regulatory_floor", height = 68)
 
 ## ======================================================================
-## Fig 5
+## Figure 5
 ## ======================================================================
-# 四个 cellranger-arc link 集直接读 p5_15 的产出；
-# ⚠️ 另两行无对应 CSV：已发表 AD multiome 的补充表不在盘上，
-#    本研究那一条由 L3 主分析给出，故按记录的数值补入。
-# ⚠️ 必须用与主分析同窗口（±500 kb）的那一版：data/derived_results/window_500000/。
-#    旧的 ±1 Mb 版本（且窗口不自洽）已移入 superseded_inconsistent_window/，与 0.663 不可比。
+## The four external cellranger-arc link sets come straight from p5_15; this
+## study's row is the Layer 3 main analysis and is written in.
+##
+## The window must match the main analysis. An earlier run at +/-1 Mb used a
+## window that was not internally consistent and is not comparable with 0.663;
+## it is kept under superseded_inconsistent_window/ so the record is complete,
+## and this panel reads window_500000/ only.
 W500 <- file.path(dirname(RES), basename(RES), "window_500000")
 if (!dir.exists(W500)) W500 <- file.path("data/derived_results", "window_500000")
 ext <- list.files(W500, "^p5_promoterOR_.*\\.csv$", full.names = TRUE) %>%
   lapply(read_csv, show_col_types = FALSE) %>% bind_rows() %>%
   transmute(lab = sub("_sorted", "", label), or = OR, lo, hi)
-stopifnot(nrow(ext) == 4)
-# 四个 cellranger-arc 参照集直接读 p5_15 的产出；本研究那一条由 L3 主分析给出。
+stopifnot(nrow(ext) == 4)   # fail loudly if the window directory is incomplete
 or_sets <- bind_rows(
   ext %>% arrange(or),
   data.frame(lab = "This study (150 nuclei)", or = 0.663, lo = 0.568, hi = 0.768)) %>%
   mutate(lab = factor(lab, levels = rev(lab)), dep = or < 1)
 
 p5a <- ggplot(or_sets, aes(or, lab, colour = dep)) +
+  ## The span of the four reference link sets.
   annotate("rect", xmin = 2.26, xmax = 3.56, ymin = -Inf, ymax = Inf,
-           fill = C_ULM, alpha = .07) +   # 四个参照 link 集的实际区间
-  # 本研究的工作点单独加底色条，按 GB 要求在面板内直接突出
-  # 注意：x 为 log10 标度，-Inf/Inf 会变成 NaN 而整块被丢弃，必须给有限边界
+           fill = C_ULM, alpha = .07) +
+  ## This study's operating point, highlighted as its own row.
+  ## x is a log10 scale, where -Inf and Inf become NaN and the whole rectangle
+  ## is dropped without any error, so the bounds have to be finite.
   annotate("rect", xmin = .451, xmax = 8.95, ymin = .42, ymax = 1.5,
            fill = C_SEA, alpha = .10) +
   geom_vline(xintercept = 1, linetype = "22", linewidth = .45, colour = "grey20") +
@@ -262,8 +300,11 @@ p5a <- ggplot(or_sets, aes(or, lab, colour = dep)) +
   theme_pub() +
   theme(axis.text.y = element_text(size = 6.5))
 
-# 同一个 link 集 (human_brain_3k) 在三个窗口下的 OR，由 p5_15 --window 重算，
-# 背景集与检出集同步收紧（见 code/analysis/p5_19_recompute_refs_at_window.sh）。
+## Panel b: one link set (human_brain_3k) scored at three windows, recomputed by
+## p5_15 --window so that the background and the detected set are tightened
+## together (see analysis/p5_19_recompute_refs_at_window.sh). Widening the
+## window raises the ratio almost twofold, which is why the window has to be
+## reported with the number.
 win <- data.frame(w = factor(c("\u00b1500 kb", "\u00b11 Mb", "\u00b11.7 Mb"),
                              levels = c("\u00b1500 kb", "\u00b11 Mb", "\u00b11.7 Mb")),
                   or = c(3.558, 4.054, 6.593))
@@ -279,6 +320,11 @@ p5b <- ggplot(win, aes(w, or, fill = w)) +
   theme_pub() +
   theme(axis.text.x = element_text(size = 6.8))
 
+## Panel c: link count against nuclei x fragments per nucleus across 28 external
+## multiome libraries. b is fitted elsewhere and fixed here; the intercept is
+## the median offset at that slope, which is robust to the handful of libraries
+## far off the trend. A positive exponent with no plateau means these libraries
+## are nowhere near saturating linkage discovery.
 lib <- rd("seaad_L3_libraries.csv") %>%
   filter(!is.na(n_cells), !is.na(link), !is.na(atac_frag)) %>%
   mutate(x = n_cells * atac_frag)
@@ -296,14 +342,14 @@ p5c <- ggplot(lib, aes(x, link)) +
   scale_y_log10(labels = trans_format("log10", math_format(10^.x))) +
   annotation_logticks(sides = "bl", size = .25, short = unit(1, "pt"),
                       mid = unit(1.6, "pt"), long = unit(2.4, "pt")) +
-  labs(
-       x = "Nuclei \u00d7 fragments per nucleus", y = "Feature linkages detected") +
+  labs(x = "Nuclei \u00d7 fragments per nucleus", y = "Feature linkages detected") +
   theme_pub()
 
 fig5 <- p5a + p5b + p5c +
   plot_layout(widths = c(1.25, .7, 1)) + plot_annotation(tag_levels = "a")
 save_fig(fig5, OUT, "Fig5_diagnostic", height = 62)
 
+## Counts behind each figure, so a run that silently lost rows shows up here.
 cat(sprintf("Fig1: %d donors, %d chips, %d replicated; P = %.2f-%.2f\n",
             nrow(ord), n_distinct(meta$Chip), n_rep, min(pv), max(pv)))
 cat(sprintf("Fig4: %d subtypes x %d nuclei; redundancy median %.1f, means %.3f-%.3f\n",

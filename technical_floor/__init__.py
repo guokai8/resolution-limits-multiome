@@ -1,15 +1,22 @@
-"""technical_floor —— 从重复文库测量单核多组学分析的分辨率下限。
+"""technical_floor -- measure resolution floors from replicate libraries.
 
-三层各有一个下限，本包测量其中两层，并把它们换算成设计量：
+The paper describes three inference layers, each with its own floor. This
+package measures two of them and converts both into design quantities:
 
-    组成层   κ，过度离散倍数，逐细胞类型给出
-    表达层   floor = a * n^b，以及由它得到的 |log2FC| 阈值
-    设计     两张表，把上面两者换算成所需的供体数与细胞数
+    composition   kappa, the overdispersion factor, per cell type
+    expression    floor = a * n^b, and the |log2FC| thresholds it implies
+    design        two tables turning those into donors and nuclei required
 
-第三层（调控推断）需要原始的 peak x cell 矩阵，不在本包范围内；论文用的
-promoter-enrichment 诊断另行提供。
+The third layer, regulatory inference, needs the raw peak-by-cell matrices and
+is out of scope here; the promoter-enrichment diagnostic the paper uses for it
+lives in the analysis scripts instead.
 
-用法：
+Two of the three constants the paper reports do not transfer between datasets.
+That is the reason this package exists: what travels is the procedure, not a
+table of numbers, so the tool measures the floors in *your* data rather than
+applying ours.
+
+Library use:
 
     from technical_floor import (
         FloorConfig, read_composition, estimate_composition_floor,
@@ -19,7 +26,7 @@ promoter-enrichment 诊断另行提供。
     floor = estimate_composition_floor(df, FloorConfig())
     print(floor.summary())
 
-命令行：
+Command line:
 
     python3 -m technical_floor --composition pairs.csv --expression floors.csv --out results/
 """

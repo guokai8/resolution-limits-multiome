@@ -42,7 +42,11 @@ SOURCES = {
 
 
 def cell_class(name: str) -> str:
-    """把细胞类型名归到大类，用来检验丰度效应是否只是类别混淆。"""
+    """Map a cell-type name to a broad class.
+
+    Used to test whether the abundance effect is really a neuronal versus
+    non-neuronal confound wearing abundance's clothes.
+    """
     n = name.lower()
     if n.startswith(("exc", "en_", "l2", "l3", "l4", "l5", "l6")):
         return "excitatory"
@@ -57,7 +61,7 @@ def ols(X: np.ndarray, y: np.ndarray) -> np.ndarray:
 
 
 def boot_by_donor(df: pd.DataFrame, fn, nboot: int = NBOOT) -> Tuple[float, float, float]:
-    """按供体重抽样，返回 (点估计, 2.5%, 97.5%)。"""
+    """Bootstrap clustered by donor. Returns (estimate, 2.5%, 97.5%)."""
     point = fn(df)
     rng = np.random.default_rng(SEED)
     donors = df.donor.to_numpy()
@@ -84,7 +88,10 @@ def gamma_simple(d: pd.DataFrame) -> float:
 
 
 def gamma_with_class(d: pd.DataFrame) -> float:
-    """加入细胞大类的固定效应后，丰度的斜率是否还在。"""
+    """Does the abundance slope survive a fixed effect for cell class?
+
+    If it vanishes, the abundance relationship was the class confound.
+    """
     cls = pd.get_dummies(d.cls, drop_first=True).to_numpy(dtype=float)
     X = np.column_stack([np.ones(len(d)), np.log(d.p.to_numpy()), cls])
     return float(ols(X, np.log(d.kappa.to_numpy()))[1])
@@ -119,9 +126,13 @@ def main() -> None:
               f"{g0:>8.3f} ({g0lo:.3f}–{g0hi:.3f}) "
               f"{g1:>8.3f} ({g1lo:.3f}–{g1hi:.3f})")
 
-        # 恒定相对误差模型的完整检验。
-        # n_eff 是供体级的库总量（在供体内对所有细胞类型相同，且与 p 不相关），
-        # 所以 κ² − 1 = c²·N·p/(1−p) 预言 log(κ²−1) 对 log(N·p/(1−p)) 的斜率为 1。
+        # The full test of the constant-relative-error model.
+        # n_eff is the donor-level library total: identical across cell types
+        # within a donor, and uncorrelated with p. So kappa^2 - 1 =
+        # c^2 * N * p/(1-p), which predicts a slope of exactly 1 for
+        # log(kappa^2 - 1) on log(N * p/(1-p)). Measuring that slope is a
+        # sharper test than the correlation, because the model fixes its value
+        # rather than only its sign.
         per = d.groupby("celltype").apply(
             lambda s: pd.Series(dict(
                 kap2=float(np.mean(s.z ** 2 / (2.0 / s.n_eff))),

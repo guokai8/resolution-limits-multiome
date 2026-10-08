@@ -1,32 +1,43 @@
 #!/usr/bin/env python3
 """
-P5 外部验证 · SEA-AD（84 供体 / 1.18M 核 / MTG）
-==================================================
-两件独立的事，共用一个 1 GB 元数据 CSV，**不需要 31 GB 的 h5ad**：
+External validation in SEA-AD (84 donors, 1.18M nuclei, middle temporal gyrus)
+=============================================================================
+Two independent jobs sharing one 1 GB metadata CSV. Neither needs the 31 GB
+h5ad except where stated.
 
-  --mode l1        ⭐ L1 组成层复现（**只需 1 GB 元数据 CSV**）
-  --mode scaling   L1 + L2（L2 需要 --h5ad，见下方警告）
-                   80 个供体有 ≥2 个 library_prep，每库 ≥50 核
-                   期望：L1 的 b 显著平于 −0.5；L2 的 b 与 −0.5 不可区分；
-                        两者之差显著 > 0
+  --mode l1        composition-layer replication; metadata CSV only
+  --mode scaling   composition and expression layers together. The expression
+                   layer needs --h5ad; see the warning on mode_scaling below.
+                   80 donors have two or more library preps with at least 50
+                   nuclei each. Expectation: the composition exponent is
+                   clearly flatter than -0.5, the expression exponent is
+                   indistinguishable from -0.5, and their difference is
+                   clearly above zero.
 
-  --mode l3sat     L3 的饱和曲线验证（**不是**技术重复验证）
-                   28 个 Multiome 文库，一供体一库，故无重复；
-                   但 cellranger-arc 的 linkage 数 vs 细胞数给出饱和曲线。
-                   ⚠️ 必须先排除测序深度混杂，否则 b≈1 可能只是深度效应。
+  --mode l3sat     the Layer 3 saturation curve. This is NOT a technical
+                   replicate analysis. The 28 multiome libraries are one per
+                   donor, so there are no replicates; what they give is link
+                   count against nucleus count. Sequencing depth has to be
+                   controlled first, or an exponent near 1 may be nothing but
+                   a depth effect.
 
-为什么 SEA-AD 是好的验证集（分诊已确认）：
-  · 80 重复供体（Ulm 只有 26）
-  · 同供体两库核数比中位 1.21（Ulm 2.67）→ 明确是独立文库，不是分片
-  · 24 个 Subclass（Ulm 12）
+Why SEA-AD is a good validation set:
+  * 80 replicated donors against the primary cohort's 26
+  * median nucleus-count ratio between a donor's two libraries is 1.21, against
+    2.67 in the primary cohort, so these are genuinely independent libraries
+    rather than one library split
+  * 24 subclasses against 12
 
-⚠️ 与 Ulm 的两处口径差异，必须在论文方法里写明：
-  1. SEA-AD 是 snRNA-seq 为主（10Xv3.1），Ulm 是 Multiome。
-     L1/L2 的定义不依赖 ATAC，故可比；但"平台不同"要写进限制。
-  2. Ulm 的批次是 Chip（一块芯片多个孔），SEA-AD 是 library_prep（一次建库）。
-     两者都是"独立的一次上样+建库"，是同一级别的技术单元。
+Two differences from the primary cohort that must be stated in the Methods:
+  1. SEA-AD is mainly snRNA-seq (10x v3.1); the primary cohort is multiome. The
+     composition and expression definitions do not involve ATAC so they remain
+     comparable, but the platform difference belongs in the limitations.
+  2. The batch unit differs: chip here (one chip, several wells) against
+     library prep there (one preparation). Both are a single independent
+     loading and library construction, so they are the same level of technical
+     unit.
 
-用法：
+Usage:
   python3 p5_12_seaad_replication.py --meta SEAAD_..._metadata.csv --mode scaling
   python3 p5_12_seaad_replication.py --meta SEAAD_..._metadata.csv --mode l3sat
 """
@@ -41,9 +52,10 @@ import pandas as pd
 DONOR, BATCH, CTYPE = "Donor ID", "library_prep", "Subclass"
 
 
-# ---------------------------------------------------------------- 共用
+# ---------------------------------------------------------------- shared
 def fit_loglog(x, y, groups, n_boot=1500, seed=0):
-    """log-log OLS + **按供体** bootstrap（同供体多类型不独立）。"""
+    """log-log OLS with a bootstrap clustered BY DONOR, since the several cell
+    types of one donor are not independent."""
     lx, ly = np.log(x), np.log(y)
     A = np.vstack([lx, np.ones_like(lx)]).T
     beta = np.linalg.lstsq(A, ly, rcond=None)[0]
@@ -65,7 +77,7 @@ def fit_loglog(x, y, groups, n_boot=1500, seed=0):
 
 
 def partial_corr(x, y, z):
-    """控制 z 后 x 与 y 的偏相关（全部取 log）。"""
+    """Partial correlation of x and y controlling for z, all on the log scale."""
     lx, ly, lz = np.log(x), np.log(y), np.log(z)
     def resid(v):
         A = np.vstack([lz, np.ones_like(lz)]).T
@@ -74,26 +86,31 @@ def partial_corr(x, y, z):
     return float(np.corrcoef(rx, ry)[0, 1])
 
 
-# ---------------------------------------------------------------- 主线
+# ---------------------------------------------------------------- main modes
 def mode_scaling(d, n_boot, allow_umi_proxy=False):
     """
-    L1 组成 + L2 表达 的两层标度对照。
+    Composition and expression scaling, side by side.
 
-    ⚠️⚠️ 关键限制（冒烟测试抓到的，不要重蹈覆辙）：
-    Ulm 的 L2 下限 = 该细胞类型内**跨基因**的 median |Δlog2CPM|，需要表达矩阵。
-    SEA-AD 的元数据 CSV **没有基因层表达**，只有每细胞总 UMI。
-    用"中位 UMI 的 |Δlog2|"作代理会得到**系统性偏小**的斜率
-    （用 Ulm 自身数据验证：真值 −0.507，UMI 代理只给 −0.248），
-    从而错误地判为"未复现"。
+    A limitation caught by the smoke test, recorded so it is not repeated.
 
-    → **L2 的复现必须用 31 GB 的 h5ad**，或干脆只报 L1。
-      本函数在未显式 --allow-umi-proxy 时拒绝输出 L2 与 Ulm 的比较。
+    The expression floor is the median |delta log2 CPM| ACROSS GENES within a
+    cell type, which requires an expression matrix. The SEA-AD metadata CSV
+    carries no gene-level expression at all -- only total UMI per nucleus.
+    Using |delta log2(median UMI)| as a stand-in gives a systematically
+    shallower slope: checked against the primary cohort's own data, the true
+    value is -0.507 and the UMI proxy returns -0.248. That is more than enough
+    to call a successful replication a failure.
+
+    So the expression layer must come from the 31 GB h5ad, or only the
+    composition layer should be reported. This function refuses to print the
+    expression-layer comparison unless --allow-umi-proxy is given explicitly.
     """
     d = d[d["Number of UMIs"].notna()].copy()
     d["Number of UMIs"] = pd.to_numeric(d["Number of UMIs"], errors="coerce")
     d = d.dropna(subset=["Number of UMIs", DONOR, BATCH, CTYPE])
 
-    # 每 (供体, 批次) 的总核数；每 (供体, 批次, 类型) 的核数与表达代理
+    # Total nuclei per (donor, batch), and nuclei plus expression proxy per
+    # (donor, batch, cell type)
     tot = d.groupby([DONOR, BATCH]).size().rename("tot")
     per = d.groupby([DONOR, BATCH, CTYPE]).agg(
         n=("Number of UMIs", "size"),
@@ -114,7 +131,9 @@ def mode_scaling(d, n_boot, allow_umi_proxy=False):
             T1, T2 = a.tot.iloc[0], b.tot.iloc[0]
             if min(T1, T2) < 50:
                 continue
-            # ---- L1 组成：标准化比例差异，n_eff = 每批**总核数**的调和平均
+            # ---- Composition: standardised proportion difference. n_eff uses
+            # the harmonic mean of TOTAL nuclei, since a proportion's
+            # denominator is the whole library.
             for ct in a.index.union(b.index):
                 f1 = a.f.get(ct, 0.0); f2 = b.f.get(ct, 0.0)
                 p = (f1 * T1 + f2 * T2) / (T1 + T2)
@@ -124,7 +143,8 @@ def mode_scaling(d, n_boot, allow_umi_proxy=False):
                 if z > 0:
                     rows1.append(dict(donor=don, ct=ct, z=z,
                                       n_eff=2 / (1 / T1 + 1 / T2)))
-            # ---- L2 表达：|Δlog2(中位UMI)|，n_eff = 该类型细胞数的调和平均
+            # ---- Expression: |delta log2(median UMI)|, n_eff from this cell
+            # type's own nuclei. This is the UMI proxy; see the docstring.
             for ct in a.index.intersection(b.index):
                 n1, n2 = a.n.get(ct, 0), b.n.get(ct, 0)
                 if min(n1, n2) < 5:
@@ -189,7 +209,7 @@ def mode_scaling(d, n_boot, allow_umi_proxy=False):
 
 # ---------------------------------------------------------------- L3
 def mode_l3sat(d, n_boot):
-    """L3 饱和曲线：linkage 数 vs 细胞数，**控制测序深度**。"""
+    """Layer 3 saturation: link count against nucleus count, controlling depth."""
     m = d[d.method == "10xMulti"].copy()
     num = ["Multiome_Feature_linkages_detected", "Multiome_Linked_peaks",
            "Multiome_Linked_genes", "ATAC_Mean_raw_read_pairs_per_cell",
@@ -220,7 +240,7 @@ def mode_l3sat(d, n_boot):
           f"95% CI [{ci[0,0]:+.3f}, {ci[1,0]:+.3f}]")
     print("   b≈1 = 线性增长、**完全未饱和**；b≈0 = 已饱和（达到生物学真值）")
 
-    # ⚠️ 关键：排除深度混杂
+    # Critical: rule out the depth confound before reading the exponent
     print("\n=== 混杂排除：控制测序深度后的偏相关 ===")
     for dcol, lab in [("atac_depth", "ATAC 每细胞原始读对"),
                       ("atac_frag", "ATAC 每细胞高质量片段"),

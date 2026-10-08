@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-P5 步骤 A2-b · 计算命题 A 的 5 个预注册特征，并跑硬门禁
-========================================================
-严格按 `decisions/PREREG_A1_susceptibility_prior.md` §2 的定义，
-在 A2-a 产出的**等细胞数、等深度**子矩阵上计算：
+Compute the five pre-registered features and run the hard gates
+==============================================================
+Strictly per the definitions in the pre-registration, computed on the
+equal-count, equal-depth sub-matrices produced by the extraction step:
 
   P1 ⭐ redundancy      每个表达基因的**独立** linked peak 数的中位数
   P2    distal_frac     link 中远端（距 TSS >3 kb）的比例
@@ -11,16 +11,23 @@ P5 步骤 A2-b · 计算命题 A 的 5 个预注册特征，并跑硬门禁
   P4    redundancy_ALS  同 P1，限于预注册 §6 的 ALS 基因集
   P5    n_expressed     检出基因数（控制变量）
 
-link 的定义（预注册 §2）：
-  该细胞类型内、跨 150 个细胞的 peak–gene 相关，±500 kb 窗口，FDR<0.05；
-  "独立" = 对显著 peak 之间做贪心去共线（Pearson |r|>0.7 视为同一元件）。
+A link is defined as: a peak-gene correlation within this cell type across
+  its 150 nuclei, inside a +/-500 kb window, at FDR < 0.05. "Independent" means
+  the significant peaks are greedily decorrelated against one another, with
+  Pearson |r| > 0.7 treated as the same regulatory element.
 
-⚠️ 本脚本**不看因变量**。它只产出特征表。
-   特征↔因变量的关系由 A3（p5_09）计算，且必须在门禁通过后才允许运行。
+  This script NEVER looks at the dependent variable. It produces the feature
+  table and nothing else. The relationship between features and the dependent
+  variable is computed in a later step, and only after the gates below pass.
+  Keeping the two apart is what stops a gate being chosen after seeing the
+  answer.
 
-硬门禁（预注册 §4.1，不过则命题 A 作废）：
-  1. |partial_r(redundancy, 该类型总 counts | 其余特征)| < 0.2
-  2. 3 个随机种子下 redundancy 的类型间**排序** Spearman ρ > 0.9
+  Hard gates. Failing either one voids the claim:
+    1. |partial_r(redundancy, total counts in this type | other features)| < 0.2
+       -- the feature must not be a restatement of sequencing depth
+    2. Spearman rho > 0.9 between cell-type RANKINGS of redundancy across the
+       three random seeds -- the feature must be stable to which nuclei were
+       drawn
 
 用法：
   python3 p5_08_claimA_features.py --out results --seeds 0,1        # 已有的种子
@@ -54,7 +61,10 @@ def load_sparse(path):
 
 
 def dense_block(sp, col_idx):
-    """把指定列重建为 (n_feat × len(col_idx)) 稠密 float32。"""
+    """Rebuild the named columns as a dense (n_feat x len(col_idx)) float32.
+
+    Densified one cell type at a time; the full matrix would not fit.
+    """
     remap = np.full(sp["shape"][1], -1, dtype=np.int64)
     remap[col_idx] = np.arange(len(col_idx))
     m = remap[sp["cols"]] >= 0
@@ -64,7 +74,7 @@ def dense_block(sp, col_idx):
 
 
 def bh_threshold(p, alpha):
-    """Benjamini-Hochberg：返回可判为显著的 p 值上限（无显著则返回 -1）。"""
+    """Benjamini-Hochberg: largest p-value called significant, or -1 if none."""
     if len(p) == 0:
         return -1.0
     ps = np.sort(p)
@@ -74,7 +84,10 @@ def bh_threshold(p, alpha):
 
 
 def corr_rows_vs_vec(A, y):
-    """A: (m × n) 每行一个特征；y: (n,)。返回每行与 y 的 Pearson r。"""
+    """Pearson r of every row of A against y.
+
+    A is (m x n), one feature per row; y is (n,). Vectorised over rows.
+    """
     Az = A - A.mean(1, keepdims=True)
     As = np.sqrt((Az ** 2).sum(1))
     yz = y - y.mean()
@@ -87,19 +100,26 @@ def corr_rows_vs_vec(A, y):
 
 
 def r_to_p(r, n):
-    """双侧 t 检验的 p 值（正态近似，n=150 足够）。"""
+    """Two-sided p from r. Normal approximation, which is fine at n = 150."""
     r = np.clip(r, -0.999999, 0.999999)
     t = r * np.sqrt((n - 2) / (1 - r ** 2))
     from math import erfc, sqrt
-    # 正态近似：p = erfc(|t|/sqrt(2))
+    # Normal approximation: p = erfc(|t|/sqrt(2))
     return np.array([erfc(abs(x) / sqrt(2)) for x in t])
 
 
 def greedy_decorrelate(P, idx, thresh=COLLIN):
     """
-    P: (k × n) 候选 peak 的可及性；idx: 候选 peak 的全局编号。
-    贪心：按与基因相关性强弱排序，逐个纳入，与已纳入者 |r|>thresh 的丢弃。
-    返回保留的数量（= 独立调控元件数）。
+    Greedily drop peaks that duplicate one another.
+
+    P is (k x n) accessibility for the candidate peaks, idx their global
+    indices. Candidates are ordered by correlation strength with the gene and
+    admitted one at a time; a candidate correlating |r| > thresh with anything
+    already admitted is discarded as the same regulatory element.
+
+    Returns the number kept, i.e. the count of independent elements. Without
+    this step the measure would mostly count how many peaks a region was
+    tiled into.
     """
     if len(idx) <= 1:
         return len(idx)
@@ -117,12 +137,16 @@ def greedy_decorrelate(P, idx, thresh=COLLIN):
 
 
 def features_for_type(Xr, Xa, genes, tss, peaks_by_chrom, als_set, min_frac=0.10):
-    """对一个细胞类型算 5 个特征。Xr/Xa 已是等深度的稠密块。"""
+    """Compute the five features for one cell type.
+
+    Xr and Xa arrive already depth-equalised and dense.
+    """
     n = Xr.shape[1]
-    # 表达基因：在 >=10% 的细胞中检出
+    # A gene counts as expressed when detected in at least 10% of nuclei
     det = (Xr > 0).sum(1)
     expressed = np.flatnonzero(det >= min_frac * n)
-    # log-CPM 归一（深度已统一，仍做 log 稳定方差）
+    # log-CPM. The depths are already equal, so this is variance stabilisation
+    # rather than normalisation.
     R = np.log1p(Xr[expressed])
     A = np.log1p(Xa)
 
@@ -151,7 +175,9 @@ def features_for_type(Xr, Xa, genes, tss, peaks_by_chrom, als_set, min_frac=0.10
 
     if not per_gene:
         return None
-    # FDR 在该细胞类型内、所有 gene-peak 对上统一控制
+    # One BH correction across every gene-peak pair within the cell type, not
+    # per gene: correcting per gene would make the threshold depend on how many
+    # peaks happen to sit near each gene.
     rr = np.concatenate([x[3] for x in per_gene])
     pv = r_to_p(rr, n)
     thr = bh_threshold(pv, FDR)

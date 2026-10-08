@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""C1 汇总：把两臂的链接集合与 trans 零假设对照，算「位置信息」OR。
+"""C1 summary: score each arm's link set against the trans null.
 
-诊断的 2×2 是（按种子分层，用与正文一致的 Mantel–Haenszel + Robins–Breslow–
-Greenland 方差合并）：
+The 2x2 behind the positional odds ratio, stratified by seed and pooled with
+Mantel-Haenszel and the Robins-Breslow-Greenland variance, as in the main text:
 
-                 启动子近端   远端
-  观测链接集合        a        b
-  trans 链接集合      c        d
+                        promoter-proximal   distal
+  observed link set             a             b
+  trans link set                c             d
 
-trans 配对保留了窗口大小与近端/远端比例的全部分布，只打断基因与其自身窗口的
-配对，所以这个 OR 直接读作：检出的链接里有多少启动子富集是**位置性**的。
-OR ≈ 1 表示该 linker 的链接集合不携带位置信息。
+The trans pairing preserves the whole distribution of window sizes and of
+proximal-to-distal ratios; the only thing it breaks is the pairing of a gene
+with its own window. So this odds ratio reads directly as: how much of the
+promoter enrichment in the detected links is POSITIONAL?
 
-用法：
+An odds ratio near 1 means that link set carries no positional information,
+however many links it contains.
+
+Usage:
   python3 c1_summary.py --grid results_methods/primary_ladder/c1_grid.csv
 """
 from __future__ import annotations
@@ -27,9 +31,13 @@ from scipy import stats as st
 
 
 def g_test(obs: np.ndarray, ref: np.ndarray) -> Tuple[float, float]:
-    """检出链接的距离带分布 vs 参照分布的 G 检验（5 自由度）。
+    """G test of the detected links' distance-band histogram against a reference.
 
-    用上全部链接而不只是启动子那一小撮，所以检验力远高于二分法。
+    Uses all the links rather than only the promoter-proximal few, so it has far
+    more power than the binary proximal/distal split -- a link set can shift its
+    whole distance profile without crossing the 3 kb promoter boundary.
+
+    Returns (G, p). NaN when either histogram is empty.
     """
     obs = np.asarray(obs, dtype=float)
     ref = np.asarray(ref, dtype=float)
@@ -42,7 +50,11 @@ def g_test(obs: np.ndarray, ref: np.ndarray) -> Tuple[float, float]:
 
 
 def band_median(bands: List[int], edges: List[int]) -> float:
-    """从距离带直方图估中位距离（带内线性插值）。"""
+    """Median distance estimated from the band histogram.
+
+    Linear interpolation within the band containing the median; the raw
+    distances are not retained, only the binned counts.
+    """
     c = np.asarray(bands, dtype=float)
     if c.sum() == 0:
         return float("nan")
@@ -114,14 +126,16 @@ def main() -> None:
             ors.append(float(r.OR))
         if not strata:
             continue
-        # 任一格为零时 MH 的 RBG 方差会退化成 nan。此时对全部层加
-        # Haldane–Anscombe 的 0.5，并记下来，保持层间可比。
+        # With an empty cell the Mantel-Haenszel RBG variance degenerates to
+        # NaN. Apply the Haldane-Anscombe 0.5 to EVERY stratum, not just the
+        # offending one, so the strata stay comparable, and record that it was
+        # applied.
         ha = any(min(s) == 0 for s in strata)
         use = [tuple(v + 0.5 for v in s) for s in strata] if ha else strata
         pos, lo, hi = mh(use)
         ct, n, linker, k, matched, archr, window = key
 
-        # 距离带：把三组种子的直方图相加后比较
+        # Distance bands: sum the three seeds' histograms, then compare
         def stack(frame: pd.DataFrame, col: str) -> np.ndarray:
             vals = []
             for v in frame[col]:

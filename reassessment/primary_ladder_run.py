@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
-"""原队列核数梯队 · 第 2 步：在抽取好的子矩阵上跑与 p5_08/NABEC 完全一致的 Layer 3 分析。"""
+"""Primary-cohort nucleus ladder, step 2: run the Layer 3 analysis.
+
+Operates on the sub-matrices written by primary_ladder_extract.py, using
+exactly the parameters of p5_08 and the external NABEC run, so that a rung of
+this ladder is comparable with both.
+
+The sequence is: draw n nuclei, downsample both modalities to the common
+depths, correlate every gene against every peak within the window, apply
+Benjamini-Hochberg across the cell type, then ask what fraction of the
+surviving links are promoter-proximal relative to the background.
+
+Only the nucleus count varies between rungs. Everything else -- window,
+promoter definition, FDR, collinearity cutoff, depth -- is frozen at module
+level so that no rung can differ in any other respect.
+"""
 import argparse, json, logging, time
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -9,13 +23,27 @@ WINDOW, PROMOTER, FDR, COLLIN = 500_000, 3_000, 0.05, 0.7
 logger = logging.getLogger("ladder")
 
 def bh_threshold(p, q, m_extra=0):
+    """Largest p-value passing Benjamini-Hochberg at level q.
+
+    m_extra adds pairs that were never tested -- peaks with no variance at this
+    depth -- to the denominator. Including them is the stricter convention and
+    is the one the paper uses throughout; it matters because the number of
+    untestable peaks itself depends on depth.
+
+    Returns -1.0 when nothing passes, which the caller treats as "no links".
+    """
     p = np.sort(p[np.isfinite(p)]); m = p.size + int(m_extra)
     if p.size == 0: return -1.0
     ok = p <= q*np.arange(1, p.size+1)/m
     return float(p[ok][-1]) if ok.any() else -1.0
 
 def downsample(M, target, rng):
-    """按列多项降采样到 target 计数。"""
+    """Multinomially downsample each column to `target` total counts.
+
+    Per column, so every nucleus ends at the same depth. Columns already below
+    target are left alone rather than being discarded or scaled up, which is
+    why the extraction step pre-filters on the same thresholds.
+    """
     M = M.tocsc().astype(np.int64); out = M.copy()
     for j in range(M.shape[1]):
         s, e = M.indptr[j], M.indptr[j+1]
@@ -44,9 +72,11 @@ def main():
     A = sparse.load_npz(D/"atac.npz").tocsc()[:, pick]
     R = sparse.load_npz(D/"rna.npz").tocsc()[:, pick]
     A = downsample(A, 5564, rng); R = downsample(R, 5265, rng)
-    A = A.T.tocsc(); R = R.T.tocsr()                     # 转成 细胞 × 特征
+    A = A.T.tocsc(); R = R.T.tocsr()      # transpose to cells x features
     logger.info("矩阵就绪 RNA %s / ATAC %s (%.0fs)", R.shape, A.shape, time.time()-t0)
 
+    # log1p on both modalities. The depths are already equalised, so this is
+    # for variance stabilisation rather than normalisation.
     A = A.astype(np.float32); A.data = np.log1p(A.data)
     Rd = np.asarray(R.todense(), dtype=np.float32); Rd = np.log1p(Rd)
 
@@ -65,6 +95,9 @@ def main():
     tss = pd.read_csv(a.tss); gi = {g: i for i, g in enumerate(genes)}
     tss = tss[tss.gene_name.isin(gi)].drop_duplicates("gene_name")
 
+    # Peak means and standard deviations, computed once over all peaks from the
+    # sparse sums rather than densifying: E[x^2] - E[x]^2, clipped at 0 for
+    # floating-point noise. A gene must be detected in at least 10% of nuclei.
     n = a.n; min_det = 0.10*n
     pmean = np.asarray(A.sum(0)).ravel()/n
     psq = np.asarray(A.multiply(A).sum(0)).ravel()/n
@@ -75,6 +108,8 @@ def main():
         if pc.empty: continue
         mids = pc.mid.to_numpy(); pidx = pc.i.to_numpy()
         for gname, t in zip(tg.gene_name, tg.tss):
+            # Peaks are sorted by midpoint per chromosome, so the window is a
+            # pair of binary searches rather than a scan.
             lo, hi = np.searchsorted(mids, [t-WINDOW, t+WINDOW])
             if hi-lo < 2: continue
             y = Rd[:, gi[gname]].astype(np.float64)
@@ -84,8 +119,15 @@ def main():
             cols = pidx[lo:hi]; ok = pstd[cols] > 0
             if ok.sum() < 2: continue
             dist = np.abs(mids[lo:hi]-t)
+            # Two backgrounds are tracked. n_all counts every eligible pair in
+            # the window; the var-peak counts below drop peaks with zero
+            # variance, which cannot be tested at this depth. Reporting both is
+            # what makes the convention's effect on the answer visible.
             n_all += dist.size; prox_all += int((dist <= PROMOTER).sum())
             cols = cols[ok]
+            # Pearson r from precomputed moments: one sparse matvec per gene
+            # instead of densifying the peak block. n/(n-1) converts the
+            # population covariance to the sample one.
             xty = np.asarray(A[:, cols].T @ y).ravel()
             cov = xty/n - pmean[cols]*y.mean()
             r = cov/(pstd[cols]*sy)*(n/(n-1))
@@ -103,6 +145,13 @@ def main():
             if sig.size==0: continue
             a_ += int((dist[sig] <= PROMOTER).sum()); b_ += int((dist[sig] > PROMOTER).sum())
     def OR(c_, d_):
+        """Haldane-Anscombe corrected odds ratio with a bootstrap interval.
+
+        The +0.5 keeps the ratio finite when a cell is empty, which happens at
+        the low rungs. The interval resamples the promoter-proximal count among
+        detected links binomially; the background is treated as fixed, since it
+        rests on millions of pairs and contributes negligible uncertainty.
+        """
         o=((a_+.5)*(d_+.5))/((b_+.5)*(c_+.5))
         bs=rng.binomial(a_+b_, (a_+.5)/(a_+b_+1), 2000)
         ci=np.percentile(((bs+.5)*(d_+.5))/((a_+b_-bs+.5)*(c_+.5)), [2.5,97.5])

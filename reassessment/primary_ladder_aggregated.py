@@ -1,29 +1,43 @@
 #!/usr/bin/env python3
-"""原队列核数梯队 · C1 对照：把 single-cell 相关换成 ArchR 式 KNN 聚合相关。
+"""The C1 comparison: swap single-nucleus correlation for ArchR-style KNN
+aggregation, holding everything else fixed.
 
-与 `primary_ladder_run.py` 的唯一差别是 peak–gene 相关在**元细胞**（metacell）
-之间计算，而不是在单核之间计算。细胞抽取、深度降采样、±500 kb 窗口、3 kb 启动子
-定义、BH FDR 0.05（含同样的 m_extra 校正）、Haldane–Anscombe 校正的 OR 与
-bootstrap 区间全部逐字保持一致——这是对照的全部意义。
+The only difference from primary_ladder_run.py is that peak-gene correlations
+are computed between METACELLS rather than between single nuclei. Nucleus
+sampling, depth downsampling, the +/-500 kb window, the 3 kb promoter
+definition, BH at FDR 0.05 with the same m_extra correction, the
+Haldane-Anscombe corrected odds ratio and its bootstrap interval are all
+identical, line for line. That is the entire point of the comparison: if the
+answer moves, the procedure moved it.
 
-聚合方式照 ArchR `addPeak2GeneLinks`：在 ATAC 的 LSI 空间里取 KNN 聚合体，
-按 overlapCutoff 去掉高度重叠者，组内 raw counts 求和后 log1p。
+Aggregation follows ArchR's addPeak2GeneLinks: KNN aggregates in the ATAC LSI
+space, highly overlapping ones dropped by overlapCutoff, raw counts summed
+within a group and then log1p.
 
-`--match-tested` 把被检验的 gene×peak 集合锁定为 single-cell 臂的集合，
-使两臂共享分母；不加时用聚合臂自己的检出规则（即真跑 ArchR 会得到的集合）。
+--match-tested pins the tested gene-by-peak set to the single-nucleus arm's,
+so both arms share a denominator. Without it each arm uses its own detection
+rule, which is the set a real ArchR run would return.
 
-两个零假设：
-  --null permute  把基因向量在观测之间打乱。对聚合臂**不是**合适的零假设：
-                  它同时破坏了 y 在 KNN 图上的平滑性，而 x 仍然平滑，
-                  于是低估假阳性。保留它只为显示这一点。
-  --null trans    把每个基因配到**另一条染色体**上另一个基因的窗口 peak 集合。
-                  两臂的图平滑性都原样保留，只打断配对，因此这是诊断
-                  「聚合把多少个链接变成假阳性」的正确零假设。窗口大小与
-                  近端/远端比例的分布也一并保留，OR 的分母因此可比。
+Two nulls, and the difference between them matters:
 
-`--linker single` 用单核相关跑同一套代码，使两臂除聚合外无任何差别。
+  --null permute  shuffles the gene vector across observations. This is NOT a
+                  valid null for the aggregated arm. Shuffling destroys y's
+                  smoothness over the KNN graph while x stays smooth, so it
+                  understates the false-positive rate. It is kept only to
+                  demonstrate that.
 
-用法：
+  --null trans    pairs each gene with the window peaks of a gene on a
+                  DIFFERENT chromosome. Graph smoothness is preserved in both
+                  arms and only the pairing is broken, so this is the correct
+                  null for asking how many links aggregation turns into false
+                  positives. The distribution of window sizes and of
+                  proximal-to-distal ratios is preserved too, which is what
+                  makes the odds ratios comparable between arms.
+
+--linker single runs the identical code path with single-nucleus correlation,
+so the two arms differ in aggregation and nothing else.
+
+Usage:
   python3 primary_ladder_aggregated.py --dir <d> --celltype X --n 150 --k 25
   python3 primary_ladder_aggregated.py --dir <d> --celltype X --n 150 --linker single
 """
@@ -42,16 +56,18 @@ from scipy import sparse, stats as st
 from scipy.spatial import cKDTree
 
 WINDOW, PROMOTER, FDR = 500_000, 3_000, 0.05
-# 距离带。启动子二分法只用上检出链接里 ~5% 的那一小撮，带状分解把全部链接都用上，
-# 因此位置信息的检验力高得多。
+# Distance bands. The binary promoter split uses only the ~5% of detected links
+# that are proximal; binning by distance uses all of them, so it has far more
+# power to see a shift in positional structure.
 DIST_BANDS = (0, 3_000, 10_000, 50_000, 100_000, 250_000, 500_001)
 DEPTH_ATAC, DEPTH_RNA = 5564, 5265
 N_SVD = 30
 OVERLAP_CUTOFF = 0.8
 MIN_DET_FRAC = 0.10
-# ArchR `getPeak2GeneLinks` 的实际默认阈值（见 R/IntegrativeAnalysis.R）。
-# 只用 BH FDR 0.05、不设相关系数下限，会放出远多于 ArchR 真实默认的链接，
-# 那是在打稻草人；`--archr-defaults` 照抄它自己的阈值。
+# ArchR getPeak2GeneLinks' actual defaults, read from R/IntegrativeAnalysis.R.
+# Using BH at 0.05 with no correlation cutoff returns far more links than ArchR
+# itself would, which would make the comparison a straw man. --archr-defaults
+# reproduces its own thresholds instead.
 ARCHR_COR_CUTOFF = 0.45
 ARCHR_FDR_CUTOFF = 1e-4
 ARCHR_VAR_QUANTILE = 0.25
@@ -62,7 +78,12 @@ logger = logging.getLogger("ladder_agg")
 
 
 def bh_threshold(p: np.ndarray, q: float, m_extra: int = 0) -> float:
-    """BH 阈值。m_extra 计入被跳过（无变异）的检验，与 single-cell 臂一致。"""
+    """BH threshold, with m_extra counting the tests that were skipped.
+
+    Skipped tests are peaks with no variance at this depth. Counting them in the
+    denominator matches the single-nucleus arm exactly, which is required for
+    the two arms to be comparable.
+    """
     p = np.sort(p[np.isfinite(p)])
     m = p.size + int(m_extra)
     if p.size == 0:
@@ -72,7 +93,11 @@ def bh_threshold(p: np.ndarray, q: float, m_extra: int = 0) -> float:
 
 
 def downsample(M: sparse.spmatrix, target: int, rng: np.random.Generator) -> sparse.csc_matrix:
-    """按列多项降采样到 target 计数。与 primary_ladder_run.py 逐字相同。"""
+    """Multinomially downsample each column to `target` counts.
+
+    Identical to primary_ladder_run.py, deliberately duplicated rather than
+    imported so that the two arms cannot drift apart.
+    """
     M = M.tocsc().astype(np.int64)
     out = M.copy()
     for j in range(M.shape[1]):
@@ -87,7 +112,11 @@ def downsample(M: sparse.spmatrix, target: int, rng: np.random.Generator) -> spa
 
 
 def lsi_embedding(A: sparse.csc_matrix, n_comp: int, rng: np.random.Generator) -> np.ndarray:
-    """TF-IDF + SVD，丢掉第 1 个成分（惯例：与测序深度共线）。A 为 细胞 × peak。"""
+    """LSI embedding: TF-IDF then SVD, dropping the first component.
+
+    The first component is conventionally discarded because it is collinear
+    with sequencing depth rather than with biology. A is cells x peaks.
+    """
     counts = A.tocsr().astype(np.float64)
     n_cells = counts.shape[0]
     peak_sums = np.asarray(counts.sum(0)).ravel()
@@ -96,7 +125,7 @@ def lsi_embedding(A: sparse.csc_matrix, n_comp: int, rng: np.random.Generator) -
     peak_sums = peak_sums[keep]
     cell_sums = np.asarray(counts.sum(1)).ravel()
     cell_sums[cell_sums == 0] = 1.0
-    # TF-IDF：tf = count / cell_total，idf = n_cells / peak_total
+    # TF-IDF: tf = count / cell total, idf = n_cells / peak total
     tf = counts.multiply(1.0 / cell_sums[:, None]).tocsc()
     idf = n_cells / peak_sums
     X = tf.multiply(idf[None, :]).tocsr()
@@ -108,16 +137,22 @@ def lsi_embedding(A: sparse.csc_matrix, n_comp: int, rng: np.random.Generator) -
     U, S, _ = sparse.linalg.svds(X, k=k, random_state=rs)
     order = np.argsort(-S)
     emb = (U * S)[:, order]
-    return emb[:, 1:]  # 丢第 1 成分
+    return emb[:, 1:]  # drop the depth-collinear first component
 
 
 def knn_aggregates(emb: np.ndarray, k: int, n_seeds: int,
                    overlap_cutoff: float, rng: np.random.Generator) -> List[np.ndarray]:
-    """ArchR 式聚合：随机种子细胞 → 其 k 近邻为一个聚合体 → 去掉高度重叠者。"""
+    """ArchR-style aggregates: random seed cell, its k nearest neighbours, drop
+    the ones that overlap an aggregate already kept.
+
+    Dropping overlaps matters: without it the aggregates are near-duplicates of
+    one another and the correlation is computed over far fewer effectively
+    independent observations than the count suggests.
+    """
     n = emb.shape[0]
     z = (emb - emb.mean(0)) / np.maximum(emb.std(0), 1e-12)
     seeds = rng.permutation(n)[:min(n_seeds, n)]
-    # 只对被选中的种子查 k 近邻，避免 n×n 距离矩阵
+    # Query neighbours only for the chosen seeds, avoiding an n x n distance matrix
     tree = cKDTree(z)
     _, nbr_seeds = tree.query(z[seeds], k=k, workers=-1)
     nbr_seeds = np.atleast_2d(nbr_seeds)
@@ -134,7 +169,11 @@ def knn_aggregates(emb: np.ndarray, k: int, n_seeds: int,
 
 
 def aggregate_counts(M: sparse.csc_matrix, groups: List[np.ndarray]) -> sparse.csr_matrix:
-    """把 细胞 × 特征 的 counts 按聚合体求和，返回 聚合体 × 特征。"""
+    """Sum cells x features counts within each aggregate.
+
+    Done as one sparse membership matrix product rather than a Python loop over
+    groups, which matters at the larger rungs.
+    """
     n_cells = M.shape[0]
     rows, cols = [], []
     for gi, members in enumerate(groups):
@@ -148,7 +187,12 @@ def aggregate_counts(M: sparse.csc_matrix, groups: List[np.ndarray]) -> sparse.c
 
 def haldane_or(a_: int, b_: int, c_: int, d_: int,
                rng: np.random.Generator, n_boot: int = 2000) -> Tuple[float, float, float]:
-    """Haldane–Anscombe 校正的 OR，区间由检出链接数的二项 bootstrap 给出。"""
+    """Haldane-Anscombe corrected odds ratio with a bootstrap interval.
+
+    The +0.5 keeps the ratio finite when a cell is empty. The interval
+    resamples only the promoter-proximal count among detected links; the
+    background rests on millions of pairs and is treated as fixed.
+    """
     o = ((a_ + .5) * (d_ + .5)) / ((b_ + .5) * (c_ + .5))
     if a_ + b_ == 0:
         return float(o), float("nan"), float("nan")
@@ -175,10 +219,16 @@ def load_features(features_dir: Path) -> Tuple[pd.DataFrame, pd.Series]:
 def trans_pairing(windows: Dict[str, Tuple[np.ndarray, np.ndarray, str]],
                   rng: np.random.Generator
                   ) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
-    """把每个基因重新配到另一条染色体上另一个基因的窗口 peak 集合。
+    """Re-pair each gene with the window peaks of a gene on another chromosome.
 
-    窗口大小与近端/远端比例的分布原样保留（只是换了持有者），两臂的图平滑性
-    也不受影响，所以这是诊断聚合带来的假阳性的正确零假设。
+    The distribution of window sizes and of proximal-to-distal ratios is
+    preserved exactly -- the windows just change hands -- and graph smoothness
+    is untouched in both arms. Only the pairing is broken, which is what makes
+    this the right null for the false positives aggregation introduces.
+
+    The 50-attempt loop is a guard: a gene on a chromosome that happens to hold
+    almost every gene could otherwise spin forever. A gene that fails all 50 is
+    simply left out of the null.
     """
     names = list(windows)
     out: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
@@ -198,23 +248,38 @@ def correlate(Rd: np.ndarray, A: sparse.csc_matrix, pv: pd.DataFrame,
               rng: Optional[np.random.Generator],
               null: str = "none", window: int = WINDOW
               ) -> Tuple[List[Tuple[np.ndarray, ...]], int, int, Dict[str, np.ndarray]]:
-    """在 n_obs 个观测（单核或聚合体）之间算窗口内 peak–gene 相关。
+    """Correlate peaks against genes within each window, over n_obs observations.
 
-    restrict 非 None 时只检验给定的 gene→peak 列集合，使两臂共享分母。
-    null="permute" 打乱基因向量；null="trans" 换成异染色体基因的窗口。
+    One observation is a single nucleus or one aggregate, depending on the arm.
+
+    Args:
+        restrict: when given, only these gene -> peak columns are tested, which
+            is what makes the two arms share a denominator.
+        null: "permute" shuffles the gene vector, "trans" swaps in another
+            chromosome's window. See the module docstring for why only the
+            second is valid for the aggregated arm.
+
+    Returns:
+        (rows, n_win, prox_win, tested). n_win and prox_win count every pair in
+        the windows, before the variance filter, since that is the background
+        the all-peaks odds ratio needs.
     """
     pmean = np.asarray(A.sum(0)).ravel() / n_obs
     psq = np.asarray(A.multiply(A).sum(0)).ravel() / n_obs
     pstd = np.sqrt(np.maximum(psq - pmean ** 2, 0.0))
-    # 方差在全部 peak / 基因上的分位秩（ArchR 的 varCutOffATAC / varCutOffRNA）
+    # Variance quantile ranks over all peaks and all genes, which is what
+    # ArchR's varCutOffATAC and varCutOffRNA are applied to.
     pvar = pstd ** 2
     varq_peak = st.rankdata(pvar, method="average") / pvar.size
     gvar = Rd.var(axis=0)
     varq_gene = st.rankdata(gvar, method="average") / max(gvar.size, 1)
 
-    # ---- 第一遍：确定每个基因的窗口（cols, dist, chrom） ----
-    # n_win/prox_win 是窗口内**全部**对的计数（未按 peak 变异过滤），
-    # 供 m_extra 与 all-peaks 分母使用，与 single-cell 臂的定义一致。
+    # ---- Pass 1: fix each gene's window (cols, dist, chrom) ----
+    # n_win and prox_win count EVERY pair in the window, before the peak
+    # variance filter. They feed m_extra and the all-peaks denominator, matching
+    # the single-nucleus arm's definition exactly.
+    # Two passes rather than one because the trans null has to swap whole
+    # windows, which cannot be done until every window is known.
     windows: Dict[str, Tuple[np.ndarray, np.ndarray, str]] = {}
     n_win = prox_win = 0
     for ch, tg in tss.groupby("chrom"):
@@ -247,10 +312,10 @@ def correlate(Rd: np.ndarray, A: sparse.csc_matrix, pv: pd.DataFrame,
     if not windows:
         return [], 0, 0, {}
 
-    # ---- 零假设：换配对 ----
+    # ---- Null: swap the pairings ----
     swapped = trans_pairing(windows, rng) if null == "trans" and rng is not None else None
 
-    # ---- 第二遍：相关 ----
+    # ---- Pass 2: correlate ----
     rows: List[Tuple[np.ndarray, ...]] = []
     tested: Dict[str, np.ndarray] = {}
     for gname, (cols, dist, _ch) in windows.items():
@@ -318,7 +383,10 @@ def main() -> None:
     D = Path(a.dir)
     t0 = time.time()
 
-    # ---- 与 single-cell 臂逐字相同的前半段，rng 消耗顺序也相同 ----
+    # ---- Identical to the single-nucleus arm, including the order in which
+    # the rng is consumed. That ordering is load-bearing: the two arms must draw
+    # the same nuclei for the same seed, which they only do if every preceding
+    # rng call matches.
     rng = np.random.default_rng(a.seed)
     cells = pd.read_csv(D / "cells.csv")
     idx = np.flatnonzero((cells.WNN_L4 == a.celltype).to_numpy())
@@ -361,7 +429,7 @@ def main() -> None:
     A = downsample(A, target_a, rng)
     R = downsample(R, target_r, rng)
     A = A.T.tocsc()
-    R = R.T.tocsr()                                  # 细胞 × 特征
+    R = R.T.tocsr()                                  # transpose to cells x features
     logger.info("矩阵就绪 RNA %s / ATAC %s (%.0fs)", R.shape, A.shape, time.time() - t0)
 
     pv, genes = load_features(Path(a.features))
@@ -369,7 +437,8 @@ def main() -> None:
     gi = {g: i for i, g in enumerate(genes)}
     tss = tss[tss.gene_name.isin(gi)].drop_duplicates("gene_name")
 
-    # ---- single-cell 臂：始终先算一遍，用来锁定共享的被检验集合 ----
+    # ---- The single-nucleus arm is always computed first, even when the run is
+    # an aggregated one: its tested set is what --match-tested pins to. ----
     A_sc = A.astype(np.float32)
     A_sc.data = np.log1p(A_sc.data)
     Rd_sc = np.log1p(np.asarray(R.todense(), dtype=np.float32))
@@ -391,9 +460,11 @@ def main() -> None:
         Aa_raw = aggregate_counts(A, groups).tocsc()
         Ra_raw = np.asarray(aggregate_counts(R, groups).todense(), dtype=np.float64)
         if a.archr_defaults:
-            # ArchR: t(t(M)/colSums(M)) * scaleTo，然后 log2(M+1)。
-            # 本研究的核已做等深度，每个聚合体恰好 k 个核，所以 colSums 本来就相等；
-            # 仍然照抄这一步，免得归一化成为对照的第二个差异。
+            # ArchR normalises as t(t(M)/colSums(M)) * scaleTo then log2(M+1).
+            # Here the nuclei are already depth-equalised and every aggregate
+            # holds exactly k of them, so the column sums are equal already and
+            # this step changes nothing. It is reproduced anyway, so that
+            # normalisation cannot become a second difference between the arms.
             acs = np.asarray(Aa_raw.sum(1)).ravel()
             acs[acs == 0] = 1.0
             Aa = Aa_raw.multiply((ARCHR_SCALE_TO / acs)[:, None]).tocsc().astype(np.float32)
@@ -423,13 +494,15 @@ def main() -> None:
     prox_tested = int((np.concatenate([x[2] for x in rows]) <= PROMOTER).sum())
 
     if a.archr_defaults:
-        # ArchR 的 FDR 是在全部被检验对上做 BH，没有 m_extra 的概念
+        # ArchR applies BH across all tested pairs and has no notion of
+        # m_extra, so its branch computes q-values directly instead of using
+        # the shared bh_threshold helper.
         order = np.argsort(pvals)
         m = pvals.size
         fdr = np.empty(m)
         fdr[order] = np.minimum.accumulate(
             (pvals[order] * m / np.arange(1, m + 1))[::-1])[::-1]
-        thr = FDR  # 占位，ArchR 分支不用 BH 阈值
+        thr = FDR  # placeholder; the ArchR branch does not use a BH threshold
     else:
         thr = bh_threshold(pvals, FDR, m_extra=n_all - allr.size)
         fdr = None
@@ -437,7 +510,8 @@ def main() -> None:
     a_ = b_ = 0
     off = 0
     link_dist: List[np.ndarray] = []
-    # 每条染色体：[近端链接, 远端链接, 近端被检验, 远端被检验]
+    # Per chromosome: [proximal links, distal links, proximal tested, distal
+    # tested]. This is what the leave-one-chromosome-out jackknife works from.
     per_chrom: Dict[str, List[int]] = {}
     for cols, _r, dist, _vqa, _vqr, chrom in rows:
         cb = per_chrom.setdefault(chrom, [0, 0, 0, 0])
@@ -448,7 +522,8 @@ def main() -> None:
         sl = slice(off, off + k)
         off += k
         if a.archr_defaults:
-            # r >= 0.45（只要正相关）且 FDR <= 1e-4 且两侧方差分位 > 0.25
+            # ArchR's own rule: r >= 0.45 (positive correlations only), FDR
+            # <= 1e-4, and variance quantile > 0.25 on both sides.
             sig = np.flatnonzero(
                 (r >= ARCHR_COR_CUTOFF) & (fdr[sl] <= ARCHR_FDR_CUTOFF)
                 & (vqa > ARCHR_VAR_QUANTILE) & (vqr > ARCHR_VAR_QUANTILE))

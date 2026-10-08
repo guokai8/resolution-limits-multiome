@@ -1,7 +1,8 @@
-"""输入表的读取与校验。
+"""Reading and validating the input tables.
 
-工具只接受长表（tidy CSV），因为那是论文自己沉积的格式，也是使用者最容易
-从任意单细胞流程里导出的格式。两类输入各有一个必需列集合。
+The tool accepts tidy long-form CSV only. That is the format the paper
+deposited, and it is the format easiest to export from any single-cell
+pipeline. Each of the two input kinds has its own required column set.
 """
 
 from __future__ import annotations
@@ -17,10 +18,12 @@ logger = logging.getLogger(__name__)
 COMPOSITION_COUNT_COLUMNS: Sequence[str] = ("donor", "celltype", "n1", "n2")
 COMPOSITION_ZSCORE_COLUMNS: Sequence[str] = ("donor", "celltype", "z", "n_eff")
 EXPRESSION_COLUMNS: Sequence[str] = ("donor", "celltype", "n_eff", "floor")
-# n1/n2 可选；给了就能在表达层上执行同一条配对准则
+# n1/n2 are optional in the expression input. Supplying them lets the same
+# pairing criterion run on the expression layer too.
 
 
 def _require_columns(df: pd.DataFrame, required: Sequence[str], path: Path) -> None:
+    """Raise with the full column list, so a typo is obvious from the message."""
     missing: List[str] = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(
@@ -29,24 +32,27 @@ def _require_columns(df: pd.DataFrame, required: Sequence[str], path: Path) -> N
 
 
 def read_composition(path: Path | str) -> pd.DataFrame:
-    """读取组成层输入。
+    """Read the composition-layer input.
 
-    接受两种形式，二选一即可：
+    Two forms are accepted; either one is enough.
 
-      · 原始计数 —— donor, celltype, n1, n2。适合从自己的流程直接导出。
-      · 预算好的统计量 —— donor, celltype, z, n_eff。适合复现已发表的分析，
-        因为占比的分母取决于哪些细胞类型进入了分析，由计数重建未必一致。
+      * Raw counts -- donor, celltype, n1, n2. The natural export from your own
+        pipeline.
+      * Precomputed statistics -- donor, celltype, z, n_eff. The right choice
+        for reproducing a published analysis, because the denominator of a
+        proportion depends on which cell types entered that analysis, and
+        rebuilding it from counts will not always reproduce it.
 
-    两者都有时以原始计数为准。
+    When both are present the raw counts win.
 
     Args:
-        path: 长表 CSV 路径。
+        path: path to the long-form CSV.
 
     Returns:
-        校验后的 DataFrame。
+        The validated DataFrame.
 
     Raises:
-        ValueError: 缺列，或计数为负。
+        ValueError: a required column is missing, or a count is negative.
     """
     path = Path(path)
     df = pd.read_csv(path)
@@ -67,19 +73,23 @@ def read_composition(path: Path | str) -> pd.DataFrame:
 
 
 def read_expression(path: Path | str) -> pd.DataFrame:
-    """读取表达层输入。
+    """Read the expression-layer input.
 
-    每行是一个 (供体, 细胞类型) 配对已算好的下限与有效细胞数。用
-    `technical_floor.expression.floor_from_counts` 可以从伪批量计数生成这张表。
+    One row per (donor, cell type) pair, carrying a floor that has already been
+    computed and the effective nucleus count behind it.
+    `technical_floor.expression.floor_from_counts` builds this table from
+    pseudobulk counts.
 
     Args:
-        path: 长表 CSV 路径，必需列 donor, celltype, n_eff, floor。
+        path: path to the long-form CSV; required columns are donor, celltype,
+            n_eff and floor.
 
     Returns:
-        校验后的 DataFrame。
+        The validated DataFrame.
 
     Raises:
-        ValueError: 缺列，或 n_eff/floor 非正。
+        ValueError: a required column is missing, or n_eff or floor is not
+            positive -- both are logged, so neither can be zero or negative.
     """
     path = Path(path)
     df = pd.read_csv(path)
@@ -94,17 +104,23 @@ def read_expression(path: Path | str) -> pd.DataFrame:
 
 
 def apply_pair_criterion(df: pd.DataFrame, min_nuclei: int) -> pd.DataFrame:
-    """执行供体级的最小细胞数准则。
+    """Apply the donor-level minimum-nucleus criterion.
 
-    论文的准则是按供体汇总后两个文库都要达到门槛，而不是按细胞类型。这条准则
-    同时管组成层和表达层——在论文自己的分析里它一度只落到了组成层上。
+    The criterion is applied to the donor total across cell types, not per cell
+    type: a donor qualifies when both of its libraries reach the threshold
+    overall. A single small cell type should not disqualify a donor.
+
+    It governs the expression layer as well as the composition layer. In the
+    paper's own analysis it was at one point applied only to composition, which
+    is why it lives in one function used by both.
 
     Args:
-        df: 含 donor, n1, n2 的长表。
-        min_nuclei: 每个文库的最小细胞数。
+        df: long-form table with donor, n1 and n2.
+        min_nuclei: minimum nucleus count per library.
 
     Returns:
-        只含合格供体的副本，并带一列 `included_in_fit`。
+        A copy carrying an `included_in_fit` column. Rows are flagged rather
+        than dropped, so a caller can report what was excluded.
     """
     if "n1" not in df.columns or "n2" not in df.columns:
         raise ValueError("执行配对准则需要 n1 与 n2 两列")

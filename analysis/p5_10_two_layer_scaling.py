@@ -1,35 +1,44 @@
 #!/usr/bin/env python3
 """
-P5 · 两层噪声结构的严格对照：同一个统计量，同一个回归，两个指数
-================================================================
-⚠️ 这个脚本是在**检验一个已经写进提纲的论断**，不是补一张表。
+Both layers on one comparable scale: same statistic, same regression, two exponents
+==================================================================================
+This script TESTS a claim that had already been written into the outline. It is
+not an extra table.
 
-提纲里写了"L1 组成层是批次驱动的，加细胞无效"。
-但那是从"过度离散 2.36×"推出来的，**而过度离散本身不能区分两种情况**：
+The outline asserted that the composition layer is batch-driven, so collecting
+more nuclei would not help. That was inferred from an overdispersion of 2.36x --
+and overdispersion on its own cannot tell these two cases apart:
 
-  (a) **乘性**放大：噪声 = 2.36 × 抽样噪声
-      → 斜率仍为 −0.5，**加细胞仍然有效**（只是需要 2.36² ≈ 5.6 倍）
-  (b) **加性**批次：噪声 = 抽样噪声 + 与 n 无关的常数项
-      → 斜率被压平（>−0.5），**加细胞无效**
+  (a) MULTIPLICATIVE inflation: noise = 2.36 x sampling noise
+      -> the slope is still -0.5, and more nuclei DOES still help; it just
+         takes 2.36^2 = 5.6 times as many
+  (b) ADDITIVE batch term: noise = sampling noise + a constant independent of n
+      -> the slope is flattened above -0.5, and more nuclei does NOT help
 
-**两者的实践含义完全相反。** 不检验就断言，是逻辑漏洞。
+The practical implications are opposite. Asserting one without testing is a
+hole in the argument, which is what this script closes.
 
-做法：把两层化成**同一个可比的量**。
+Method: put both layers on the same comparable quantity.
 
-  L2 表达层： floor_expr(n) = median |Δ log2CPM|
-  L1 组成层： 标准化的组成差异
-              z = |f1 − f2| / sqrt( p(1−p) )
-              纯多项抽样下 SD(f1−f2) = sqrt(p(1−p)(1/n1+1/n2))
-              ⇒ z ∝ n_eff^(−0.5)，**与 L2 同样的 −0.5 预测**
+  expression layer   floor_expr(n) = median |delta log2 CPM|
+  composition layer  standardised composition difference
+                     z = |f1 - f2| / sqrt(p(1-p))
+                     under pure multinomial sampling,
+                     SD(f1-f2) = sqrt(p(1-p)(1/n1 + 1/n2))
+                     so z scales as n_eff^(-0.5) -- the SAME -0.5 prediction as
+                     the expression layer
 
-于是两层都拟合 log(量) ~ log(n_eff)，斜率直接可比。
+Both layers are then fitted as log(quantity) on log(n_eff), and the two slopes
+are directly comparable.
 
-**一个佐证性的先验**：`FINDING_P5_04` 观察到过度离散**随丰度上升**
-（少突 7.44×，稀有抑制性类型仅 1.3×）。在乘性模型下这不该发生；
-在加性模型下，丰度高的类型抽样噪声小、固定批次项占比更大 → 比值更高。
-所以先验倾向 (b)，但**必须实测**。
+A supporting prior, not a substitute for the test: overdispersion was observed
+to RISE with abundance (7.44x in oligodendrocytes against 1.3x in rare
+inhibitory types). A multiplicative model does not predict that. An additive one
+does: an abundant type has less sampling noise, so a fixed batch term makes up
+more of its total. The prior therefore favours (b) -- which is exactly why it
+has to be measured rather than assumed.
 
-用法：
+Usage:
   python3 p5_10_two_layer_scaling.py --data DIR --out results
 """
 
@@ -87,7 +96,9 @@ def composition_pairs(data_dir, level="WNN_L2.5", min_cells=50):
                 p = (f1 * n1 + f2 * n2) / (n1 + n2)
                 if not (0 < p < 1):
                     continue
-                # n_eff 用**总核数**的调和平均（组成的抽样单位是全部核）
+                # n_eff uses the harmonic mean of TOTAL nuclei, not of this
+                # cell type's nuclei: for composition the sampling unit is the
+                # whole library, since a proportion's denominator is all nuclei.
                 neff = 2.0 / (1.0 / n1 + 1.0 / n2)
                 z = abs(f1 - f2) / np.sqrt(p * (1 - p))
                 if z <= 0:
@@ -104,7 +115,7 @@ def main():
     ap.add_argument("--n-boot", type=int, default=1500)
     args = ap.parse_args()
 
-    # ---------------- L1 组成层 ----------------
+    # ---------------- Composition layer ----------------
     c = composition_pairs(args.data)
     print(f"L1 组成层：{len(c)} 个观测，{c.donor.nunique()} 供体，"
           f"{c.celltype.nunique()} 类型")
@@ -112,7 +123,7 @@ def main():
     b1, ci1, bs1 = fit_loglog(c.n_eff.values, c.z.values, c.donor.values,
                               args.n_boot)
 
-    # ---------------- L2 表达层（已有） ----------------
+    # ---------------- Expression layer (already computed upstream) ----------------
     e = pd.read_csv(os.path.join(args.out, "p5_floor_scaling_pairs.csv"))
     b2, ci2, bs2 = fit_loglog(e.n_eff.values, e.median_abs_log2FC.values,
                               e.donor.values, args.n_boot)
@@ -124,7 +135,8 @@ def main():
     print(f"{'L1 组成':<16}{b1[0]:>10.3f}{f'[{ci1[0,0]:.3f}, {ci1[1,0]:.3f}]':>22}{-0.5:>12.3f}")
     print(f"{'L2 表达':<16}{b2[0]:>10.3f}{f'[{ci2[0,0]:.3f}, {ci2[1,0]:.3f}]':>22}{-0.5:>12.3f}")
 
-    # 两个斜率是否不同？按供体配对 bootstrap 求差
+    # Are the two slopes different? Bootstrap the difference with donors paired
+    # across the two layers, so the comparison is within-donor.
     k = min(len(bs1), len(bs2))
     d = bs1[:k, 0] - bs2[:k, 0]
     print(f"\n斜率之差 (L1 − L2) = {b1[0]-b2[0]:+.3f}   "

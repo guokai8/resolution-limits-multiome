@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
-"""把已发表的细胞类型组成差异放到技术下限上重新评估。
+"""Re-assess published cell-type composition differences against the floor.
 
-预注册：plan/2026-09-22_floor_reassessment_prespecification.md
-（SHA-256 b5efb71d878b11c1c531f7408d6d9430c1d545cb0554649fdca41dfd03c75e94）
+Pre-registered: plan/2026-09-22_floor_reassessment_prespecification.md
+(SHA-256 b5efb71d878b11c1c531f7408d6d9430c1d545cb0554649fdca41dfd03c75e94)
 
-⚠️ 手稿自身的结论是过度离散不可跨数据集迁移，故**主分析用多项式下限 κ=1**
-（数学下界，任何真实数据集都达不到），脑队列实测的 3.90/4.28 仅作标注过的敏感性。
+The primary analysis uses the MULTINOMIAL floor, kappa = 1. That is deliberate.
+The paper's own finding is that overdispersion does not transfer between
+datasets, so applying the brain cohorts' measured 3.90 and 4.28 to someone
+else's data would contradict the result being reported. kappa = 1 is a
+mathematical lower bound that no real dataset can beat, which makes any
+contrast falling below it unambiguous. The measured values are reported
+alongside as a labelled sensitivity analysis, never as the headline.
 
-每个 contrast = (数据集 × 注释层级 × 细胞类型 × 一对分组)：
-  Δ            = 两组 donor 级比例均值之差的绝对值
-  Var_κ(Δ)     = κ² p(1−p) [ Σ_A(1/n_d)/D_A² + Σ_B(1/n_d)/D_B² ]
-  下限 F_κ     = 1.96 √Var_κ(Δ)
-  常规检验     = donor 级比例的 Welch t 检验
-主要结局：在常规检验 P<0.05 的 contrast 中，Δ ≤ F_κ 的比例。
+One contrast = (dataset x annotation level x cell type x one pair of groups):
+
+  delta      = |difference in mean donor-level proportion between the groups|
+  Var_k      = kappa^2 p(1-p) [ sum_A(1/n_d)/D_A^2 + sum_B(1/n_d)/D_B^2 ]
+  floor F_k  = 1.96 sqrt(Var_k)
+  conventional test = Welch t test on the donor-level proportions
+
+Primary outcome: among contrasts the conventional test calls significant at
+P < 0.05, what fraction have delta <= F_k?
 """
 
 from __future__ import annotations
@@ -31,9 +39,12 @@ MIN_DONORS_PER_GROUP = 5
 KAPPAS = {"multinomial": 1.0, "brain_seaad": 3.90, "brain_als": 4.28}
 
 
-# ---------------------------------------------------------------- 数据加载
+# ---------------------------------------------------------------- loading
 def _h5ad_obs(path: Path, cols: List[str]) -> pd.DataFrame:
-    """只读 obs 的指定列（含 categorical 解码），不载入矩阵。"""
+    """Read named obs columns from an .h5ad, decoding categoricals.
+
+    The matrix is never touched, so memory stays independent of dataset size.
+    """
     import h5py
     out = {}
     with h5py.File(path, "r") as f:
@@ -75,7 +86,8 @@ def load_D2(root: Path) -> Optional[Dict]:
     m = pd.read_csv(p, usecols=["Donor ID", "Class", "Subclass", grp],
                     dtype=str, low_memory=False).rename(columns={"Donor ID": "donor"})
     vals = [v for v in m[grp].dropna().unique()]
-    # 预注册 §9：序数变量取两端
+    # Pre-registration section 9: for an ordinal variable, contrast the two
+    # extremes rather than adjacent levels, which is what the source papers do.
     order = ["Not AD", "Low", "Intermediate", "High"]
     present = [v for v in order if v in vals]
     con = [(present[-1], present[0])] if len(present) >= 2 else []
@@ -110,7 +122,8 @@ def load_D4(root: Path) -> Optional[Dict]:
         if "Subject ID" not in m or "Diagnosis" not in m:
             continue
         vals = sorted(m["Diagnosis"].dropna().unique())
-        # 子串匹配：本数据集的对照写作 "Non-neurological control"
+        # Substring match: this dataset spells its control group
+        # "Non-neurological control" rather than the usual label.
         ctrl = next((v for v in vals if "control" in v.lower() or v.lower() in ("ctrl", "hc")), None)
         con = [(v, ctrl) for v in vals if ctrl and v != ctrl]
         out.append(dict(name=f"D4_GSE330130_{tag}", tissue="brain", donor="Subject ID",
@@ -150,13 +163,14 @@ def load_D5(root: Path) -> Optional[Dict]:
                 obs=m, contrasts=con)
 
 
-# ---------------------------------------------------------------- 核心计算
+# ---------------------------------------------------------------- analysis
 def analyse(ds: Dict) -> pd.DataFrame:
     rows = []
     obs = ds["obs"]
     dcol, gcol = ds["donor"], ds["group"]
     obs = obs.dropna(subset=[dcol, gcol])
-    # donor → 组（取该 donor 的唯一值；不唯一则丢弃并记录）
+    # Map donor -> group, taking the donor's unique value. A donor assigned to
+    # more than one group is dropped and logged rather than silently resolved.
     dg = obs.groupby(dcol)[gcol].nunique()
     bad = dg[dg > 1].index.tolist()
     if bad:
@@ -202,10 +216,13 @@ def analyse(ds: Dict) -> pd.DataFrame:
                     r[f"above_{k}"] = bool(delta > F)
                 r["delta_over_floor_multinomial"] = delta / r["floor_multinomial"] \
                     if r["floor_multinomial"] > 0 else np.nan
-                # ---- 事后补充（非预注册）：把细胞当独立个体的合并检验 ----
-                # 文献中常见的做法：把组内各 donor 的细胞合并，对
-                # (该类型 vs 其余) × (组A vs 组B) 做 2x2 检验。该检验假设细胞独立，
-                # 正是手稿所否定的假设。
+                # ---- Added after the fact, NOT pre-registered ----
+                # The comparison commonly seen in the literature: pool every
+                # donor's cells within a group and run a 2x2 test of (this cell
+                # type vs the rest) by (group A vs group B). It assumes cells are
+                # independent, which is exactly the assumption this paper
+                # rejects. Computed here so the two can be contrasted directly,
+                # and flagged as post hoc because it was not pre-registered.
                 ca, cb = int(tab.loc[A, ct].sum()), int(tab.loc[B, ct].sum())
                 ta, tb = int(ncell.loc[A].sum()), int(ncell.loc[B].sum())
                 table = np.array([[ca, ta - ca], [cb, tb - cb]])

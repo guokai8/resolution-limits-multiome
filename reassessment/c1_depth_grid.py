@@ -1,30 +1,38 @@
 #!/usr/bin/env python3
-"""审稿意见 V3：核数 × 测序深度的二维响应面。
+"""The nucleus-number by sequencing-depth response surface.
 
-正文只做了两条线——固定深度变核数，和固定 150 核变深度——所以"限制资源是核数而
-不是读长"只在那一个操作点上成立。这个脚本把两者铺成网格，用来区分信息量是否
-近似只依赖 N × depth 的乘积，还是存在不可用深度替代的 N 效应。
+The main text runs two lines only -- vary nuclei at fixed depth, and vary depth
+at 150 nuclei -- so the claim that nuclei rather than reads are the limiting
+resource holds at one operating point. This script spreads the two over a grid
+to separate two possibilities: that information depends only on the product
+N x depth, or that there is an N effect that depth cannot substitute for.
 
-网格受数据本身限制，而这个限制本身就是答案的一半。要求 ATAC 与 RNA **同时**达到
-倍数目标，`Exc_LINC00507_FREM3` 的达标核数是 9,429（1x）、6,226（2x）、3,850（3x）、
-2,275（4x）、631（6x）、169（8x）；寡树突胶质细胞在 2x 以上就只剩 283 个。也就是说
-在一个固定文库里，核数与每核深度**不能各自独立地买到**：可行前沿近似满足
-N × depth ≈ 一万，直到 4 倍以上深核的尾部耗尽。原梯队的深度序列停在 150 核正是
-这个缘故。
+The grid is limited by the data, and that limit is half the answer. Requiring
+BOTH ATAC and RNA to reach the depth multiple, Exc_LINC00507_FREM3 has 9,429
+qualifying nuclei at 1x, 6,226 at 2x, 3,850 at 3x, 2,275 at 4x, 631 at 6x and
+169 at 8x; oligodendrocytes fall to 283 beyond 2x. In other words, within one
+fixed library nucleus count and per-nucleus depth CANNOT be bought
+independently: the feasible frontier sits near N x depth = ten thousand until
+the tail of deep nuclei runs out past 4x. That is also why the original depth
+series stopped at 150 nuclei.
 
-因此这里不铺满析因网格，而是沿**等乘积线**取点：如果信息量只依赖 N × depth 的
-乘积，沿一条等乘积线启动子富集应当不变；如果存在不可用深度替代的 N 效应，沿线
-富集应当随 N 上升。这正是审稿意见要区分的两件事，而且比满网格省三分之二的算力。
+So rather than a full factorial, points are taken along LINES OF CONSTANT
+PRODUCT. If information depends only on the product, promoter enrichment should
+be flat along such a line; if there is an N effect depth cannot replace, it
+should rise with N along the line. That is exactly the distinction at issue,
+and it costs a third of a full grid.
 
-  等乘积 ≈ 1200：(150, 8x) (300, 4x) (600, 2x) (1200, 1x)
-  等乘积 ≈ 2400：(600, 4x) (1200, 2x) (2400, 1x)
-  纯核数线（1x）：150 / 400 / 900 / 2400
-  纯深度线（150 核）：1x / 2x / 4x / 8x
+  product ~ 1200:  (150, 8x) (300, 4x) (600, 2x) (1200, 1x)
+  product ~ 2400:  (600, 4x) (1200, 2x) (2400, 1x)
+  pure nucleus line (1x):     150 / 400 / 900 / 2400
+  pure depth line (150 nuclei): 1x / 2x / 4x / 8x
 
-所有格子都用 --require-depth 抽样（只从达标核里抽），否则降采样会放过未达标的核，
-等深度被静默破坏。代价是 1 倍那一行与已发表梯队相差一个核（9,429/9,430）。
+Every cell samples with --require-depth, drawing only from nuclei that already
+clear the target. Without it, downsampling would quietly admit nuclei below
+target and the equal-depth guarantee would be broken. The cost is that the 1x
+row differs from the published ladder by a single nucleus, 9,429 against 9,430.
 
-用法：
+Usage:
   python3 code/reassessment/c1_depth_grid.py --dir <d> --out depth_grid.csv
 """
 from __future__ import annotations
@@ -41,15 +49,16 @@ from typing import List, Optional, Tuple
 import pandas as pd
 
 CELLTYPE = "Exc_LINC00507_FREM3"
-# (核数, 深度倍数) —— 只列数据支持的格子
+# (nuclei, depth multiple) -- only the cells the data can actually support
 CELLS: List[Tuple[int, float]] = [
-    # 纯深度线（150 核）与等乘积 1200 线的端点
+    # Pure depth line (150 nuclei), which also supplies the endpoint of the
+    # constant-product-1200 line
     (150, 1.0), (150, 2.0), (150, 4.0), (150, 8.0),
-    # 等乘积 ≈ 1200
+    # constant product ~ 1200
     (300, 4.0), (600, 2.0), (1200, 1.0),
-    # 等乘积 ≈ 2400
+    # constant product ~ 2400
     (600, 4.0), (1200, 2.0), (2400, 1.0),
-    # 纯核数线（1x）补齐
+    # pure nucleus line at 1x, filling in the rungs not already covered
     (400, 1.0), (900, 1.0),
 ]
 SEEDS = (0, 1, 2)

@@ -1,11 +1,17 @@
-"""表达层下限及其标度。
+"""The expression floor and how it scales.
 
-论文的量：对每个 (供体, 细胞类型) 配对，
-    floor = median_g | log2(CPM_1g + 1) - log2(CPM_2g + 1) |
-并集取 CPM > 0 的基因，要求至少 min_genes 个。随后在对数-对数空间拟合
+For each (donor, cell type) pair,
+
+    floor = median over genes of |log2(CPM_1g + 1) - log2(CPM_2g + 1)|
+
+taken over the union of genes with CPM > 0 in either member, requiring at
+least min_genes of them. The floors are then fitted in log-log space as
+
     floor = a * n_eff ** b
-b ≈ -1/2 是纯多项式抽样的签名，所以 b 本身不是发现；有信息的是 a，以及
-观测相对匹配零模型的超出量。
+
+An exponent near -1/2 is the signature of pure multinomial sampling, so b is
+not itself a finding. What carries information is a, the magnitude, and how far
+the observations sit above a matched null.
 """
 
 from __future__ import annotations
@@ -25,17 +31,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ExpressionFloor:
-    """表达层下限拟合的结果。
+    """The fitted expression floor.
 
     Attributes:
-        exponent: 拟合指数 b。
-        exponent_lo: 按供体聚类自助的下界。
-        exponent_hi: 上界。
-        coefficient: 拟合系数 a。
-        n_obs: 参与拟合的 (供体 x 细胞类型) 观测数。
-        n_donors: 参与拟合的供体数。
-        median_n_eff: 观测的有效细胞数中位数；远超它的外推没有依据。
-        min_n_eff: 本次拟合所用的支撑集下限。
+        exponent: the fitted b.
+        exponent_lo: lower bound, bootstrap clustered by donor.
+        exponent_hi: upper bound.
+        coefficient: the fitted a.
+        n_obs: (donor x cell type) observations in the fit.
+        n_donors: donors in the fit.
+        median_n_eff: median effective nucleus count observed. Extrapolating
+            far past it is not supported by anything in the data, which is why
+            the design table flags it.
+        min_n_eff: the support floor this fit was run under.
     """
 
     exponent: float
@@ -48,7 +56,7 @@ class ExpressionFloor:
     min_n_eff: float
 
     def threshold(self, n_eff: float) -> float:
-        """给定每细胞类型有效细胞数，返回 |log2 fold change| 的技术噪声阈值。"""
+        """The |log2 fold change| noise threshold at a given effective n."""
         if n_eff <= 0:
             raise ValueError("n_eff 必须为正")
         return float(self.coefficient * n_eff ** self.exponent)
@@ -66,20 +74,24 @@ class ExpressionFloor:
 def floor_from_counts(
     counts_a: Sequence[float], counts_b: Sequence[float], min_genes: int = 200
 ) -> Optional[float]:
-    """由一对伪批量计数向量算出表达下限。
+    """Compute one expression floor from a pair of pseudobulk count vectors.
 
-    两个向量必须按同一基因顺序对齐。并集规则：任一成员 CPM > 0 即纳入。
+    The two vectors must be aligned to the same gene order. The union rule
+    keeps a gene when CPM > 0 in *either* member; an intersection rule would
+    quietly drop exactly the genes that differ most between the libraries.
 
     Args:
-        counts_a: 第一个文库的每基因计数。
-        counts_b: 第二个文库的每基因计数，与 counts_a 等长同序。
-        min_genes: 返回结果所需的最少并集基因数。
+        counts_a: per-gene counts for the first library.
+        counts_b: per-gene counts for the second, same length and order.
+        min_genes: minimum union size before a floor is returned.
 
     Returns:
-        下限，或并集基因不足 / 某库总计数为零时返回 None。
+        The floor, or None when the union is too small or a library has zero
+        total counts. None rather than an exception: an unusable pair is an
+        ordinary outcome when scanning many of them.
 
     Raises:
-        ValueError: 两个向量长度不等。
+        ValueError: the two vectors differ in length.
     """
     a = np.asarray(counts_a, dtype=float)
     b = np.asarray(counts_b, dtype=float)
@@ -105,17 +117,21 @@ def _loglog_fit(n: np.ndarray, y: np.ndarray) -> Tuple[float, float]:
 def estimate_expression_floor(
     df: pd.DataFrame, config: FloorConfig = FloorConfig()
 ) -> ExpressionFloor:
-    """拟合表达层下限对有效细胞数的标度关系。
+    """Fit how the expression floor scales with effective nucleus count.
+
+    As in the composition layer, the bootstrap resamples donors rather than
+    observations. A resampled draw that happens to contain fewer than five
+    observations is skipped rather than fitted on too little data.
 
     Args:
-        df: 长表，列为 donor, celltype, n_eff, floor。
-        config: 口径配置；`min_n_eff` 设定支撑集下限。
+        df: long-form table with donor, celltype, n_eff, floor.
+        config: the conventions to use; `min_n_eff` sets the support floor.
 
     Returns:
-        ExpressionFloor。
+        An ExpressionFloor.
 
     Raises:
-        ValueError: 应用支撑集下限后不足 5 个观测。
+        ValueError: fewer than five observations survive the support floor.
     """
     work = df[df.n_eff >= config.min_n_eff] if config.min_n_eff > 0 else df
     work = work[(work.n_eff > 0) & (work.floor > 0)]

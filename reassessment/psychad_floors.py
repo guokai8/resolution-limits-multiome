@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""PsychAD（MSSM + RADC）的组成与表达技术下限。
+"""Composition floor in the PsychAD replicates (MSSM and RADC).
 
-口径与手稿完全一致（照 p5_10 / p5_14）：
-  组成: z = |f1-f2| / sqrt(p(1-p))，多项式期望 sqrt(2/n_eff)，
-        过度离散 = RMS of z/sqrt(2/n_eff)
-  表达: median |log2(CPM1+1) - log2(CPM2+1)|，基因取并集 (CPM>0 任一)，≥200 基因
-        零模型 = 合并 profile 按各自深度多项式重抽样
-  标度: log(floor) ~ log(n_eff) OLS，按 donor 聚类 bootstrap
+Conventions are identical to p5_10 and p5_14 so the numbers are comparable:
+  composition  z = |f1-f2| / sqrt(p(1-p)), multinomial expectation
+               sqrt(2/n_eff), overdispersion = RMS of z / sqrt(2/n_eff)
+  scaling      OLS of log(z) on log(n_eff), bootstrap clustered by donor
 
-⚠️ PsychAD 的重复是【同一管悬液分装成两份并行上机】（Sci Data 2025 方法：
-   "2 aliquots of 60,000 pooled nuclei ... processed in parallel"），
-   因此它测的是【上机+建库+测序】那一层，不含核分离与组织取样。
-   这正是与 Ruf et al. 队列（含组织分装+核分离+不同实验批次）对比的价值所在。
+What a PsychAD replicate actually repeats matters for interpreting the result.
+These are two aliquots of ONE pooled nuclear suspension run in parallel (Sci
+Data 2025: "2 aliquots of 60,000 pooled nuclei ... processed in parallel"), so
+they capture loading, library prep and sequencing -- and nothing before that.
+Tissue sampling and nuclear dissociation are shared between the two members and
+cannot contribute to the measured spread.
+
+That is precisely why they are worth measuring. Contrasting them with the Ruf
+et al. cohort, whose replicates do span tissue sub-sampling and dissociation,
+is what separates the part of the floor that comes from the bench from the part
+that comes from the instrument.
 """
 from __future__ import annotations
 import argparse, json, logging, time
@@ -22,6 +27,12 @@ logger = logging.getLogger("psychad")
 MIN_CELLS = 50
 
 def read_obs(path: Path, cols):
+    """Read selected obs columns from an .h5ad without loading X.
+
+    AnnData stores a categorical as a group of codes plus categories, and a
+    plain array otherwise, so both shapes have to be handled. Reading obs alone
+    keeps the memory cost independent of the matrix size.
+    """
     out = {}
     with h5py.File(path, "r") as f:
         o = f["obs"]
@@ -35,6 +46,12 @@ def read_obs(path: Path, cols):
     return pd.DataFrame(out)
 
 def fit(x, y, g, rng, nb=2000):
+    """OLS slope of log(y) on log(x), with a bootstrap clustered by g.
+
+    Resampling donors rather than observations: the pairs from one donor share
+    a suspension, so treating them as independent would understate the
+    interval. Returns [slope, 2.5th percentile, 97.5th percentile].
+    """
     ok = np.isfinite(x)&np.isfinite(y)&(x>0)&(y>0)
     lx, ly, gg = np.log(x[ok]), np.log(y[ok]), g[ok]
     b = float(np.polyfit(lx, ly, 1)[0])
@@ -61,7 +78,9 @@ def main():
     logger.info("%s: %d 核, %d donor, %d 个 %s",
                 a.cohort, len(obs), obs.donor_id.nunique(), obs[a.level].nunique(), a.level)
 
-    # 每 donor 取细胞数最多的两个 aliquot，各需 >=50
+    # Take the two largest aliquots per donor, each needing at least 50 nuclei.
+    # Largest two rather than all pairs: a donor with three aliquots would
+    # otherwise contribute three correlated pairs and be weighted threefold.
     n = obs.groupby(["donor_id","mid"]).size().rename("n").reset_index()
     n = n[n.n >= MIN_CELLS]
     top2 = n.sort_values("n", ascending=False).groupby("donor_id").head(2)
@@ -84,6 +103,8 @@ def main():
             c1 = int(cnt.get((donor,m1,ct),0)); c2 = int(cnt.get((donor,m2,ct),0))
             f1, f2 = c1/n1, c2/n2
             p = (c1+c2)/(n1+n2)
+            # p of 0 or 1 means the cell type is absent from both aliquots or
+            # fills them; sqrt(p(1-p)) is then 0 and z is undefined.
             if p <= 0 or p >= 1: continue
             z = abs(f1-f2)/np.sqrt(p*(1-p))
             if z <= 0: continue

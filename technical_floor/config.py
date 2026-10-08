@@ -1,38 +1,52 @@
-"""估计量的不可变配置。
+"""Immutable configuration for the floor estimators.
 
-论文里每一个口径选择在这里都有一个显式字段，默认值就是论文所用的那一套。
-改动任何一个字段都会改变结果，所以它们是配置而不是常量。
+Every convention the paper had to choose appears here as an explicit field, and
+the defaults are the ones the paper used. Changing any field changes the result,
+which is why these are configuration rather than constants buried in the code.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-# 论文的组成层统计量：z = |f1 - f2| / sqrt(p(1-p))，与多项式期望 sqrt(2/n_eff) 相比。
-# n_eff 取两库细胞数的调和平均。
+# The composition statistic is z = |f1 - f2| / sqrt(p(1-p)), compared against
+# the multinomial expectation sqrt(2/n_eff), where n_eff is the harmonic mean of
+# the two libraries' nucleus counts.
 DEFAULT_MIN_NUCLEI_PER_PAIR = 50
 DEFAULT_MIN_GENES = 200
-# 1000 是论文沉积结果所用的次数；改动它会在第三位小数上移动区间，
-# 从而让工具与论文报告的区间不再逐位一致。
+# 1000 is the number of resamples behind the deposited results. Changing it
+# moves the interval in the third decimal, so the tool would stop agreeing
+# digit for digit with the intervals the paper reports.
 DEFAULT_BOOTSTRAP = 1000
 DEFAULT_SEED = 0
 
 
 @dataclass(frozen=True)
 class FloorConfig:
-    """一次下限估计的全部口径选择。
+    """Every convention behind one floor estimate.
+
+    Frozen on purpose: a config is passed down through the estimators, and a
+    field that could be mutated halfway would make a result impossible to
+    attribute to a stated set of choices.
 
     Attributes:
-        min_nuclei_per_pair: 供体级入选门槛。两个文库都必须达到该细胞数，
-            论文用 50。这条准则同时管组成层与表达层。
-        min_genes: 计算表达下限所需的最少并集基因数，论文用 200。
-        min_n_eff: 进入标度拟合的最小有效细胞数。0 表示不设下限（论文的已发表
-            口径）；设为 10 或 25 可检验结论对低计数尾部的稳健性。
-        n_bootstrap: 自助重抽样次数，按供体聚类。
-        seed: 自助的随机种子。
-        abundance: 设计表所针对的细胞类型丰度，论文用 0.10。
-        target_pp: 设计表所要分辨的组间差异，单位百分点，论文用 1.0。
-        z: 双侧显著性对应的正态分位数，论文用 1.96。
+        min_nuclei_per_pair: donor-level inclusion threshold. Both libraries
+            must reach this nucleus count; the paper used 50. The criterion
+            governs the expression layer as well as the composition layer.
+        min_genes: minimum size of the union gene set needed to compute an
+            expression floor; the paper used 200.
+        min_n_eff: minimum effective nucleus count for a pair to enter the
+            scaling fit. 0 means no floor, which is the published convention;
+            10 or 25 tests whether the conclusion survives dropping the
+            low-count tail.
+        n_bootstrap: resamples, clustered by donor rather than by pair, since
+            pairs from one donor are not independent.
+        seed: random seed for the bootstrap.
+        abundance: the cell-type abundance the design tables are computed at;
+            the paper used 0.10.
+        target_pp: the between-group difference the design tables resolve, in
+            percentage points; the paper used 1.0.
+        z: normal quantile for the two-sided interval; the paper used 1.96.
     """
 
     min_nuclei_per_pair: int = DEFAULT_MIN_NUCLEI_PER_PAIR
@@ -45,6 +59,8 @@ class FloorConfig:
     z: float = 1.96
 
     def __post_init__(self) -> None:
+        # Validate here rather than at the point of use: a bad abundance would
+        # otherwise surface as a silently wrong design table.
         if not 0.0 < self.abundance < 1.0:
             raise ValueError(f"abundance 必须在 (0,1) 内，收到 {self.abundance}")
         if self.target_pp <= 0:

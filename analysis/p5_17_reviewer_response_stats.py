@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """
-P5 步骤 17 · 审稿意见触发的三项重算（B2/B3/B5/B6）
-==================================================
-全部只用已沉积的派生表，不重跑上游扫描。输出写入 data/derived_results/。
+Recomputations triggered by review, from deposited tables only
+=============================================================
+Nothing here re-runs an upstream scan; every block reads a deposited derived
+table and writes back into data/derived_results/.
 
-B2  表达层标度指数对「最小有效核数」支撑集的敏感性，
-    以及 SEA-AD 观测 vs 其自身 matched null 在**同一支撑集**上的配对比较。
-B3  Layer 3 阶梯：seed 是同一批核的重抽样，不是独立 strata。
-    改为「每个 seed 内按细胞类型做 MH 合并，再跨 seed 合成」。
-B5  组成层 κ 的置信区间与逐细胞类型取值。
-B6  两队列组成层指数差异的 donor-clustered bootstrap 检验。
+B2  sensitivity of the expression-layer exponent to the minimum-effective-n
+    support floor, plus a paired comparison of the Seattle atlas observations
+    against their own matched null ON THE SAME SUPPORT.
+B3  the Layer 3 ladder. A seed is a re-draw of the same nuclei, not an
+    independent stratum, so this pools cell types WITHIN a seed by
+    Mantel-Haenszel and then combines across seeds.
+B5  confidence interval for the composition-layer kappa, and its per-cell-type
+    values.
+B6  donor-clustered bootstrap test of the difference in composition exponent
+    between the two cohorts.
 
-用法：
+Usage:
     python3 code/analysis/p5_17_reviewer_response_stats.py
 """
 
@@ -31,14 +36,14 @@ NBOOT = 4000
 SEED = 0
 
 
-# ----------------------------------------------------------------------------- 工具
+# ----------------------------------------------------------------------------- helpers
 def read_csv(path: str) -> List[Dict[str, str]]:
     with open(path, newline="") as fh:
         return list(csv.DictReader(fh))
 
 
 def loglog_fit(n: np.ndarray, y: np.ndarray) -> Tuple[float, float]:
-    """返回 (指数 b, 系数 a)，拟合 log y ~ b log n + log a。"""
+    """Fit log y = b log n + log a, returning (exponent b, coefficient a)."""
     b, la = np.polyfit(np.log(n), np.log(y), 1)
     return float(b), float(math.exp(la))
 
@@ -46,7 +51,7 @@ def loglog_fit(n: np.ndarray, y: np.ndarray) -> Tuple[float, float]:
 def boot_by_group(
     n: np.ndarray, y: np.ndarray, groups: np.ndarray, stat, nboot: int = NBOOT
 ) -> Tuple[float, float]:
-    """按 group（供体）重抽样，返回 stat 的 95% 区间。"""
+    """Bootstrap by group (donor), returning the 95% interval of stat."""
     rng = np.random.default_rng(SEED)
     uniq = np.unique(groups)
     out = []
@@ -62,10 +67,17 @@ def boot_by_group(
 
 # ----------------------------------------------------------------------------- B2
 def b2_exponent_support_sensitivity() -> List[Dict[str, object]]:
-    """运动皮层观测指数随最小 n_eff 变化；SEA-AD 观测 vs 自身 null 的配对比较。"""
+    """Exponent against the support floor, and observed against null.
+
+    The motor cortex exponent is recomputed as the minimum n_eff is raised, to
+    show the fit is not carried by the low-count tail. The Seattle atlas
+    observations are then compared with their own matched null, paired row by
+    row on the same support -- comparing two separately fitted intercepts
+    instead would confound the support difference with the effect."""
     rows: List[Dict[str, object]] = []
 
-    # 50 核配对准则同样管表达层：只用 included_in_fit == yes 的行（26 个供体）
+    # The 50-nucleus pairing criterion governs the expression layer too: keep
+    # only included_in_fit == yes, which is 26 donors
     mc = [x for x in read_csv(f"{ST}/Supplementary_Table_3a_expression_floors_motor_cortex.csv")
           if x.get("included_in_fit", "yes").startswith("yes")]
     n = np.array([float(x["n_eff"]) for x in mc])
@@ -81,7 +93,8 @@ def b2_exponent_support_sensitivity() -> List[Dict[str, object]]:
                          exponent=round(b, 4), exponent_lo=round(lo, 4),
                          exponent_hi=round(hi, 4), coefficient=round(a, 3)))
 
-    # SEA-AD：观测与 null 逐行配对，必须在同一支撑集上比较
+    # Seattle atlas: observation and null are paired row by row, and must be
+    # compared on the same support
     ob = read_csv(f"{DR}/seaad_L2_obs.csv")
     nu = read_csv(f"{DR}/seaad_L2_null.csv")
     key = lambda x: (x["donor"], x["ct"])
@@ -118,7 +131,8 @@ def b2_exponent_support_sensitivity() -> List[Dict[str, object]]:
 
 # ----------------------------------------------------------------------------- B3
 def _mh(tabs: Sequence[Tuple[float, float, float, float]]) -> Tuple[float, float]:
-    """Mantel–Haenszel 合并 OR 与 Robins–Breslow–Greenland 的 log-OR 标准误。"""
+    """Mantel-Haenszel pooled odds ratio with the Robins-Breslow-Greenland
+    standard error of the log odds ratio."""
     R = S = 0.0
     PR = QS = PSQR = 0.0
     for a, b, c, d in tabs:
@@ -138,13 +152,19 @@ def _tabs_from(rows: Sequence[Dict[str, str]],
                ha: bool = False,
                exclude_detected: bool = False
                ) -> List[Tuple[float, float, float, float]]:
-    """由 link/tested 计数构造 2x2。
+    """Build the 2x2 tables from link and tested counts.
 
-    全文统一口径（与 Table 3 表体一致）：
-      · ha=False —— 阶梯与深度序列中没有任何一格为零，Haldane–Anscombe 校正不需要，
-        加了反而把估计往 1 拉，并且与正文其余 OR 不可比。
-      · exclude_detected=False —— 背景集不从检验集中扣除已检出的 link。
-    两个开关保留，是为了能显式重现另一口径并量化差别。
+    One convention is used throughout, matching the body of Table 3:
+
+      * ha=False. No cell in the ladder or the depth series is empty, so the
+        Haldane-Anscombe correction is unnecessary. Applying it anyway would
+        pull the estimates towards 1 and make them incomparable with every
+        other odds ratio in the paper.
+      * exclude_detected=False. The background is not reduced by the links
+        already detected.
+
+    Both switches are kept so the alternative convention can be reproduced
+    explicitly and the size of the difference quantified, rather than asserted.
     """
     out = []
     for x in rows:
@@ -160,7 +180,8 @@ def _tabs_from(rows: Sequence[Dict[str, str]],
 
 
 def b3_ladder_seed_handling() -> List[Dict[str, object]]:
-    """seed 是同一批核的重抽样：先在 seed 内合并细胞类型，再跨 seed 合成。"""
+    """A seed is a re-draw of the same nuclei: pool cell types within a seed,
+    then combine across seeds."""
     rows: List[Dict[str, object]] = []
     for cohort, path in (("primary", f"{DR}/primary_L3_nucleus_ladder.csv"),
                          ("external", f"{DR}/nabec_L3_nucleus_ladder.csv")):
@@ -171,12 +192,15 @@ def b3_ladder_seed_handling() -> List[Dict[str, object]]:
         for nlev in sorted({int(x["n"]) for x in data}):
             at = [x for x in data if int(x["n"]) == nlev]
 
-            # 旧口径：所有 (细胞类型 x seed) 当作独立 strata
+            # Old convention: every (cell type x seed) treated as an
+            # independent stratum
             or_all, se_all = _mh(_tabs_from(at))
-            # 带 HA + 扣除检出的那一版，仅用于量化口径本身的贡献
+            # The variant with Haldane-Anscombe and the detected links removed
+            # from the background, kept only to quantify what the convention
+            # itself contributes
             or_ha, _ = _mh(_tabs_from(at, ha=True, exclude_detected=True))
 
-            # 新口径：每个 seed 内合并细胞类型
+            # New convention: pool cell types within each seed
             per: List[Tuple[float, float]] = []
             for sd in sorted({x["seed"] for x in at}):
                 sub = [x for x in at if x["seed"] == sd]
@@ -185,7 +209,8 @@ def b3_ladder_seed_handling() -> List[Dict[str, object]]:
             lv = np.array([p[0] for p in per])
             within = float(np.mean([p[1] ** 2 for p in per]))
             between = float(np.var(lv, ddof=1)) if len(lv) > 1 else 0.0
-            # 保守合成：种子内抽样方差 + 种子间下采样方差
+            # Conservative combination: within-seed sampling variance plus
+            # between-seed downsampling variance
             se_comb = math.sqrt(within + between)
             mu = float(lv.mean())
             rows.append(dict(
@@ -207,9 +232,10 @@ def b3_ladder_seed_handling() -> List[Dict[str, object]]:
 
 # ----------------------------------------------------------------------------- B5
 def b5_kappa() -> List[Dict[str, object]]:
-    """κ 的逐细胞类型取值、RMS 汇总及其自助区间。"""
-    # 与 B9 同源：从沉积的逐对表重算，而不是读另一张前置汇总表。
-    # 两者此前在 12 个细胞类型里有 4 个不一致，正文引用的是这一份。
+    """Per-cell-type kappa, the RMS summary, and its bootstrap interval."""
+    # Same source as b9: recomputed from the deposited per-pair tables rather
+    # than read from a separate upstream summary. The two disagreed for 4 of 12
+    # cell types; this is the one the text quotes.
     zz, nn, _ = _zn(COHORT_PAIR_TABLES[0][1], None)
     ct = np.array([x["celltype"] for x in read_csv(COHORT_PAIR_TABLES[0][1])])
     ratio = zz / np.sqrt(2.0 / nn)
@@ -218,7 +244,8 @@ def b5_kappa() -> List[Dict[str, object]]:
             "mean_frac": float(np.mean([float(x["p"]) for x in read_csv(COHORT_PAIR_TABLES[0][1])
                                         if x["celltype"] == t]))}
            for t in sorted(set(ct))]
-    # 已发表的 κ = 4.28 是 z_rms 的 RMS，不是 overdispersion_ratio 那一列的 RMS
+    # The published kappa = 4.28 is the RMS of z_rms, NOT the RMS of the
+    # overdispersion_ratio column -- a distinction that is easy to lose
     k = np.array([float(x["z_rms"]) for x in src])
     ct = [x["celltype"] for x in src]
     frac = np.array([float(x["mean_frac"]) for x in src])
@@ -239,11 +266,13 @@ def b5_kappa() -> List[Dict[str, object]]:
     rows.append(dict(celltype="__median_across_cell_types__", mean_fraction="",
                      kappa=round(float(np.median(k)), 3)))
 
-    # 设计成本：10% 丰度的细胞类型，解析 1 个百分点所需每组核数
+    # Design cost: nuclei per group needed to resolve one percentage point for
+    # a cell type at 10% abundance
     def need(kappa: float, target_pp: float = 1.0, p: float = 0.10) -> float:
         return 2 * (1.96 * kappa * math.sqrt(p * (1 - p)) * 100 / target_pp) ** 2
 
-    # 设计成本用全文统一的 κ（B7 的逐对合并值），不用逐细胞类型 RMS
+    # Design cost uses the paper-wide kappa (b7's per-pair pooled value), not
+    # the per-cell-type RMS
     pooled_kappa = _kappa(*_zn(COHORT_PAIR_TABLES[0][1], None)[:2])
     for lab, kv in (("design_nuclei_at_pooled_kappa", pooled_kappa),
                     ("design_nuclei_at_RMS", rms),
@@ -252,7 +281,7 @@ def b5_kappa() -> List[Dict[str, object]]:
                     ("design_nuclei_multinomial", 1.0)):
         rows.append(dict(celltype=f"__{lab}__", mean_fraction="",
                          kappa=int(round(need(kv)))))
-    # κ 与丰度的相关
+    # Correlation of kappa with abundance
     r = float(np.corrcoef(np.log(frac), k)[0, 1])
     rows.append(dict(celltype="__pearson_r_kappa_vs_log_abundance__",
                      mean_fraction="", kappa=round(r, 3)))
@@ -261,7 +290,8 @@ def b5_kappa() -> List[Dict[str, object]]:
 
 # ----------------------------------------------------------------------------- B6
 def b6_exponent_difference() -> List[Dict[str, object]]:
-    """两队列组成层指数差异的 donor-clustered bootstrap。"""
+    """Donor-clustered bootstrap of the between-cohort difference in composition
+    exponent."""
     path = f"{DR}/p5_two_layer_boot.csv"
     if not os.path.exists(path):
         print(f"  [skip] {path} 不存在，B6 跳过")
@@ -296,7 +326,10 @@ def _kappa(z: np.ndarray, n: np.ndarray) -> float:
 
 
 def b7_cohort_overdispersion() -> List[Dict[str, object]]:
-    """四个队列的 κ 全部由沉积的逐对表重算，供图脚本读取（取代写死的字面量）。"""
+    """Recompute kappa for all four cohorts from the deposited per-pair tables.
+
+    The figure scripts read this rather than carrying literals, so a figure
+    cannot drift away from the tables it claims to show."""
     rng = np.random.default_rng(SEED)
     out = []
     for label, path, cohort in COHORT_PAIR_TABLES:
@@ -309,7 +342,7 @@ def b7_cohort_overdispersion() -> List[Dict[str, object]]:
             idx = np.concatenate([np.flatnonzero(d == g) for g in pick])
             bs.append(_kappa(z[idx], n[idx]))
         lo, hi = np.percentile(bs, [2.5, 97.5])
-        # 组成层标度指数：|z| 对 n_eff 的对数-对数斜率
+        # Composition scaling exponent: log-log slope of |z| on n_eff
         b, _ = loglog_fit(n, np.abs(z) + 1e-12)
         out.append(dict(cohort=label, n_pairs=len(z), n_donors=len(uniq),
                         kappa=round(k, 4), kappa_lo=round(float(lo), 4),
@@ -318,7 +351,8 @@ def b7_cohort_overdispersion() -> List[Dict[str, object]]:
 
 
 def b6_cohort_exponent_difference() -> List[Dict[str, object]]:
-    """运动皮层 vs Seattle 的组成层指数差异，供体聚类自助。"""
+    """Motor cortex against Seattle atlas: difference in composition exponent,
+    donor-clustered bootstrap."""
     z1, n1, d1 = _zn(COHORT_PAIR_TABLES[0][1], None)
     z2, n2, d2 = _zn(COHORT_PAIR_TABLES[1][1], None)
     f = lambda z, n: loglog_fit(n, np.abs(z) + 1e-12)[0]
@@ -338,7 +372,8 @@ def b6_cohort_exponent_difference() -> List[Dict[str, object]]:
 
 
 def b8_depth_series() -> List[Dict[str, object]]:
-    """ATAC 深度序列：同样把 seed 当重复测量，而不是独立 strata。"""
+    """The ATAC depth series, with seeds again treated as repeated measures
+    rather than independent strata."""
     rows = read_csv(f"{DR}/nabec_L3_external_replication.csv")
     at150 = [x for x in rows if x["n"] == "150"]
     dep = [x for x in at150 if re.search(r"da\d+", x["file"])]
@@ -355,7 +390,7 @@ def b8_depth_series() -> List[Dict[str, object]]:
     for depth in sorted(groups):
         at = groups[depth]
         or_all, se_all = _mh(_tabs_from(at))
-        # seed 由文件名末尾的 seed<N> 标识
+        # The seed is encoded as seed<N> at the end of the filename
         per = []
         seeds = sorted({(re.search(r"seed(\d+)", x["file"]).group(1)) for x in at})
         for sd in seeds:
@@ -379,10 +414,12 @@ def b8_depth_series() -> List[Dict[str, object]]:
 
 
 def b9_kappa_by_celltype_all_cohorts() -> List[Dict[str, object]]:
-    """四个重复集各自的逐细胞类型 κ。
+    """Per-cell-type kappa in each of the four replicate sets.
 
-    论文原来只报每个队列一个合并 κ。但 κ 在数据集**内部**的跨细胞类型变异，
-    远大于它在数据集**之间**的变异；由于成本按 κ² 走，这个差别决定了设计。
+    The paper originally reported one pooled kappa per cohort. But kappa varies
+    far more between cell types WITHIN a dataset than it does BETWEEN datasets,
+    and since design cost scales as kappa squared, that is the difference that
+    actually determines a design.
     """
     out: List[Dict[str, object]] = []
     for label, path, cohort in COHORT_PAIR_TABLES:

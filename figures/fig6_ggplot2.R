@@ -1,17 +1,29 @@
 #!/usr/bin/env Rscript
-# Fig 6 · 框架图：分辨率由断言的统计单元决定。
-# 用法: Rscript fig6_ggplot2.R <derived_results_dir> <out_dir>
+# Figure 6 -- the framework figure: resolution follows from the statistical unit
+# the claim is defined on.
 #
-# 按 Genome Biology 的要求重做：这张图是概念核心，不再是三组互不相干的曲线。
-#   a  生物学问题 → 统计单元 → 分辨率估计量 → 实验需求
-#   b  三类断言各自的统计单元与分辨率量
-#   c  三者在同一条「每细胞类型核数」轴上的紧凑对照（不画全部曲线）
+# Usage: Rscript fig6_ggplot2.R <derived_results_dir> <out_dir>
+#
+# This is the conceptual centre of the paper rather than a results figure, so it
+# carries no curves at all. Three panels:
+#   a  the chain, biological question -> statistical unit -> resolution
+#      estimator -> experimental requirement,
+#   b  that chain filled in for each of the three classes of claim,
+#   c  the three resulting requirements placed on one shared axis of nuclei per
+#      cell type, which is the quantity an experimenter actually plans.
+#
+# Panels a and b are drawn by hand on a blank canvas; every number in panel c is
+# quoted from the Results rather than recomputed here. The first argument is
+# accepted for symmetry with the other figure scripts but is unused.
 args <- commandArgs(trailingOnly = TRUE)
 OUT  <- ifelse(length(args) >= 2, args[2], "figures")
 source(file.path(dirname(sub("--file=", "", grep("--file=", commandArgs(), value = TRUE)[1])),
                  "fig_common.R"))
 
-## ---- a  流程 ---------------------------------------------------------------
+## ---- a  The chain ----------------------------------------------------------
+## Four boxes stacked top to bottom, each with an italic example underneath it.
+## The example follows one claim -- a change in cell-type proportion -- the whole
+## way down, so the reader sees a single path rather than four abstractions.
 step <- data.frame(
   y   = c(4, 3, 2, 1),
   lab = c("Biological question", "Statistical unit",
@@ -25,6 +37,8 @@ pa <- ggplot(step) +
              label.size = 0, label.padding = unit(3, "pt")) +
   geom_text(aes(1, y - 0.33, label = eg), colour = "grey40",
             size = 2.0, family = BASE_FAMILY, fontface = "italic") +
+  ## Arrows between consecutive boxes: from just under box i to just above
+  ## box i+1, hence y[-4] and y[-1].
   annotate("segment", x = 1, xend = 1, y = step$y[-4] - 0.46, yend = step$y[-1] + 0.2,
            colour = "grey55", linewidth = .45,
            arrow = arrow(length = unit(3.2, "pt"), type = "closed")) +
@@ -33,7 +47,9 @@ pa <- ggplot(step) +
   labs(tag = "a") +
   theme_blank()
 
-## ---- b  三类断言的对照表 ----------------------------------------------------
+## ---- b  The same chain for all three claims --------------------------------
+## A three-column table drawn with text geoms. Column positions are tuned so
+## the widest entry in each column clears the next column at print size.
 tab <- data.frame(
   y    = c(3, 2, 1),
   claim = c("Composition", "Expression", "Regulation"),
@@ -47,6 +63,7 @@ pb <- ggplot(tab) +
   annotate("text", x = c(0.04, 1.58, 3.22), y = 3.74, hjust = 0, size = 1.95,
            colour = "grey25", fontface = "bold", family = BASE_FAMILY,
            label = c("Biological claim", "Statistical unit", "Resolution measure")) +
+  ## The claim column is coloured by layer, matching Figure 1c.
   geom_text(aes(0.04, y, label = claim, colour = I(col)), hjust = 0,
             size = 2.05, fontface = "bold", family = BASE_FAMILY) +
   geom_text(aes(1.58, y, label = unit), hjust = 0, colour = "grey25",
@@ -60,8 +77,20 @@ pb <- ggplot(tab) +
   labs(tag = "b") +
   theme_blank()
 
-## ---- c  同一轴上的紧凑对照 --------------------------------------------------
-## 只标各层的操作区间，不画任何曲线。数值全部取自正文。
+## ---- c  The three requirements on one axis ---------------------------------
+## Band = the range given in the Results, point = the central estimate. These
+## are ranges, not confidence intervals, and the legend says so.
+##
+##   Expression  17-91     the measured support of the floor (median effective
+##                         n = 39), so larger n is extrapolation, not evidence
+##   Composition 44,435-   nuclei per group to resolve one percentage point at
+##               499,575   the measured overdispersion, median to most
+##                         overdispersed cell type; cost scales as kappa squared
+##   Regulation  400-5,000 where promoter enrichment crosses unity, primary
+##                         cohort to external cohort
+##
+## Three decades separate them. That gap is the paper's practical point, and it
+## only shows up once all three sit on one axis.
 band <- data.frame(
   layer = factor(c("Expression", "Composition", "Regulation"),
                  levels = c("Regulation", "Composition", "Expression")),
@@ -76,6 +105,8 @@ band <- data.frame(
 pc <- ggplot(band, aes(y = layer, colour = I(col))) +
   geom_linerange(aes(xmin = lo, xmax = hi), linewidth = 2.6, alpha = .32) +
   geom_point(aes(x = mid), size = 2.2) +
+  ## Labels sit at the geometric centre of each band, which is the midpoint on
+  ## a log axis. hjust differs per row to keep them inside the panel.
   geom_text(aes(x = sqrt(lo * hi), label = note, hjust = c(0, 1, 0.5)),
             vjust = -1.6, size = 1.95, family = BASE_FAMILY, colour = "grey30") +
   scale_x_log10(limits = c(10, 1.1e6),

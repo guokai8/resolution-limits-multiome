@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
-# P5 步骤 0.7 · 下载公开参考数据（**由你本机运行**）
+# Step 0.7: download the public reference data. Run this on your own machine.
 # =============================================================================
-# 用法：
-#     bash code/p5_05_download_refs.sh            # 只下 A2 必需的（约 50 MB）
-#     bash code/p5_05_download_refs.sh --all      # 连 GWAS/LDSC 一起下（约 12 GB）
+# Usage:
+#     bash code/p5_05_download_refs.sh            # only what Layer 3 needs (~50 MB)
+#     bash code/p5_05_download_refs.sh --all      # plus GWAS and LDSC (~12 GB)
 #     REF=/path/to/refs bash code/p5_05_download_refs.sh
 #
-# 下完后跑校验：
+# Then verify:
 #     python3 code/p5_06_build_tss.py --ref refs --data ~/Desktop/ResearchD --out results
+#
+# Downloads resume (curl -C -) and existing files are skipped, so the script is
+# safe to re-run after an interruption. Each file lands as .part and is renamed
+# only on success, so a truncated download is never mistaken for a complete one.
 # =============================================================================
 set -euo pipefail
 
@@ -18,7 +22,7 @@ ALL=0
 mkdir -p "$REF"
 cd "$REF"
 
-get() {  # get <url> <outfile>
+get() {  # get <url> <outfile> -- skip if present, resume if partial
   local url="$1" out="$2"
   if [[ -s "$out" ]]; then echo "  [skip] $out 已存在"; return 0; fi
   echo "  [get ] $out"
@@ -29,10 +33,11 @@ get() {  # get <url> <outfile>
 echo "=============================================================="
 echo "1/3 · GENCODE 注释（A2 的唯一阻塞项）"
 echo "=============================================================="
-# ⚠️ 版本必须匹配数据所用参考：
-#    Ulm multiome 用 10x GRCh38-2020-A = GENCODE v32 / Ensembl 98
-#    盘上那个 gencode.v30.gene_meta.tsv.gz 只有 基因名↔ID 两列，**没有坐标**，
-#    所以必须下完整 GTF 才能拿到 TSS。
+# The annotation version must match the one the data were aligned against.
+# The Ulm multiome used 10x GRCh38-2020-A, which is GENCODE v32 / Ensembl 98.
+# Note the gencode.v30.gene_meta.tsv.gz that ships with some pipelines carries
+# only gene name and ID -- no coordinates -- so the full GTF is required to get
+# TSS positions at all.
 get "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_32/gencode.v32.annotation.gtf.gz" \
     "gencode.v32.annotation.gtf.gz"
 
@@ -46,7 +51,7 @@ if [[ $ALL -eq 1 ]]; then
   echo "=============================================================="
   echo "2/3 · GWAS 汇总统计（命题 C 用，约 2 GB）"
   echo "=============================================================="
-  # ALS：van Rheenen 2021，27,205 例 / 110,881 对照（欧洲）
+  # ALS: van Rheenen 2021, 27,205 cases / 110,881 controls, European ancestry
   get "http://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/GCST90027001-GCST90028000/GCST90027164/GCST90027164_buildGRCh37.tsv.gz" \
       "ALS_vanRheenen2021_GCST90027164_GRCh37.tsv.gz"
 

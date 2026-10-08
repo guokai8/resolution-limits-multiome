@@ -1,28 +1,32 @@
 #!/usr/bin/env python3
 """
-P5 步骤 0.4 · 跨芯片技术重复标定
-==================================
-Ulm 设计里有一个原作者没有利用、我们也差点错过的资源：
+Cross-chip technical replicate calibration
+=========================================
+The Ulm design contains a resource its own authors did not use, and that this
+project very nearly missed:
 
-    12 个 Chip / 32 个 Well
-    52 个供体只上了 1 个 Chip，**27 个供体上了 2 个 Chip**
+    12 chips / 32 wells
+    52 donors appear on one chip; 27 donors appear on TWO
 
-同一个人、不同芯片 ⇒ 两次测量之间的差异**全部是技术性的**。
-这给了一条免费的"技术噪声下限"：任何小于它的疾病效应都不可信。
+One person, two chips: every difference between the two measurements is
+technical. That is a free floor on technical noise, and any disease effect
+smaller than it cannot be believed.
 
-本脚本做两层标定：
+Two layers are calibrated here.
 
-  L1 组成层（**只用元数据，零计算**）
-      同一供体在两个芯片上的细胞类型比例差异。
-      用途：为所有**组成/比例**类结论（含命题 A 的因变量）提供噪声下限。
+  L1, composition -- metadata only, no matrix computation.
+      The difference in cell-type proportion for one donor across two chips.
+      Gives a noise floor for every proportion-based conclusion.
 
-  L2 表达层（需要按 (供体 × Chip × 细胞类型) 分组的伪批量）
-      同一供体两芯片间的表达相关性 / 变异。
-      用途：为所有**差异表达/可及性**结论提供噪声下限。
-      ⚠️ 需先跑：p5_01_pseudobulk_stream.py --group-extra Well
+  L2, expression -- needs pseudobulk grouped by (donor x chip x cell type).
+      Expression correlation and variability for one donor across two chips.
+      Gives a noise floor for every differential expression or accessibility
+      conclusion. Run p5_01_pseudobulk_stream.py --group-extra Well first.
 
-为什么重要：论文自己承认"DEG 数与每类细胞的总 reads 数强相关，
-不做功效均衡就无法比较细胞类型间的改变强度"。技术噪声下限正是做这件事的标尺。
+Why this matters: the source paper itself notes that DEG counts correlate
+strongly with total reads per cell type, so comparing the magnitude of change
+between cell types is meaningless without power balancing. A measured technical
+floor is the yardstick that makes that balancing possible.
 
 用法：
   python3 p5_04_technical_replicates.py --data DIR --out results/
@@ -48,7 +52,10 @@ def load_meta(data_dir, level):
 
 
 def composition_level(m, level, min_cells=50):
-    """L1：同供体跨芯片的细胞类型比例差异 = 组成分析的技术噪声下限。"""
+    """L1: cross-chip proportion differences for one donor.
+
+    This is the technical noise floor for any composition analysis.
+    """
     per = (m.groupby(["ID", "Chip", level]).size()
              .rename("n").reset_index())
     tot = per.groupby(["ID", "Chip"])["n"].sum().rename("tot").reset_index()
@@ -56,7 +63,7 @@ def composition_level(m, level, min_cells=50):
     per = per[per["tot"] >= min_cells]
     per["frac"] = per["n"] / per["tot"]
 
-    # 找出上了 >=2 个芯片的供体
+    # Donors appearing on two or more chips -- the replicate pairs
     nchip = per.groupby("ID")["Chip"].nunique()
     reps = nchip[nchip >= 2].index.tolist()
     print(f"  上了 >=2 个芯片且每片 >= {min_cells} 核的供体: {len(reps)}")
@@ -93,7 +100,10 @@ def composition_level(m, level, min_cells=50):
 
 
 def expression_level(pb_path, m, level):
-    """L2：同供体跨芯片的表达相关性 = 差异表达结论的技术噪声下限。"""
+    """L2: cross-chip expression agreement for one donor.
+
+    This is the technical noise floor for any differential expression result.
+    """
     z = np.load(pb_path, allow_pickle=True)
     counts, groups = z["counts"], [str(g) for g in z["groups"]]
     parts = [g.split("||") for g in groups]
@@ -104,7 +114,7 @@ def expression_level(pb_path, m, level):
     gi["chip"] = gi["well"].str.extract(r"^(Chip\d+)")
     gi["col"] = np.arange(len(gi))
 
-    # CPM + log
+    # CPM normalise then log, so the comparison is on the scale DE tests use
     lib = counts.sum(0).astype(float)
     ok = lib > 0
     X = np.zeros_like(counts, dtype=np.float32)

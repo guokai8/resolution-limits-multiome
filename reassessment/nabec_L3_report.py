@@ -1,10 +1,29 @@
 #!/usr/bin/env python3
-"""Layer 3 外部复现汇总：7 个细胞类 + n 梯队阳性对照 + Mantel-Haenszel 合并。"""
+"""Layer 3 external replication, reported.
+
+Three blocks:
+  * seven cell classes at n=150 with every parameter forced to the primary
+    cohort's operating point,
+  * four fine clusters chosen to match the primary cohort's annotation
+    granularity, since the sign of the result depends on granularity,
+  * a positive control that holds depth fixed and raises only nucleus number,
+    which is what distinguishes a nucleus-number effect from a depth effect.
+
+Each block is then pooled by Mantel-Haenszel under both background
+conventions, so the convention's effect on the answer is visible rather than
+assumed.
+"""
 import json, glob, numpy as np
 
 def load(p): return json.load(open(p))
 
 def mh(ds, bg="all"):
+    """Mantel-Haenszel pooling with the Robins-Breslow-Greenland variance.
+
+    `bg` picks the background convention: "all" counts every tested pair,
+    "var" excludes peaks with no variance at the depth analysed. The two are
+    reported side by side because they move the answer about twofold.
+    """
     Rs = Ss = 0.0; PR = PS = QR = QS = 0.0
     for d in ds:
         a = d["prox_links"]; b = d["n_links"] - a
@@ -18,6 +37,7 @@ def mh(ds, bg="all"):
     return OR, OR*np.exp(-1.96*se), OR*np.exp(1.96*se)
 
 def row(d, lab):
+    """One formatted table row. max(..., 1) guards a run that found no links."""
     pl = 100*d["prox_links"]/max(d["n_links"], 1)
     return (f"{lab:12s} {d['n']:6d} {d['n_tested_all']:10d} {d['n_links']:7d} "
             f"{pl:6.2f} {d['OR']:7.3f} [{d['lo']:5.3f},{d['hi']:6.3f}]")

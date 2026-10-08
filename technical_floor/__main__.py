@@ -1,4 +1,9 @@
-"""命令行入口：python3 -m technical_floor"""
+"""Command-line entry point: python3 -m technical_floor
+
+Reads one or both input tables, applies the pairing criterion, runs the
+estimators and writes the design tables. Everything printed here is also
+written to CSV, so the console output is a summary rather than the deliverable.
+"""
 
 from __future__ import annotations
 
@@ -67,6 +72,9 @@ def main(argv: list[str] | None = None) -> int:
 
     comp = None
     if args.composition:
+        # Two accepted input shapes. Raw counts can be filtered by the pairing
+        # criterion here; precomputed z/n_eff cannot, because the criterion
+        # needs the per-library nucleus counts, so the user is warned instead.
         df = read_composition(args.composition)
         if {"n1", "n2"}.issubset(df.columns):
             df = apply_pair_criterion(df, config.min_nuclei_per_pair)
@@ -90,8 +98,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.expression:
         edf = read_expression(args.expression)
+        # Same two shapes, same reason for the warning branch.
         if {"n1", "n2"}.issubset(edf.columns):
-            # 同一条配对准则必须同时管表达层；论文原来只把它落到了组成层上
+            # The pairing criterion governs the expression layer too. In the
+            # paper's own analysis it was at one point applied to composition
+            # only, which is why both branches call the same function here.
             edf = apply_pair_criterion(edf, config.min_nuclei_per_pair)
             edf = edf[edf.included_in_fit]
         else:

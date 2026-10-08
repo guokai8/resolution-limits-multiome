@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # =============================================================================
-# P5 步骤 18 · 下载四个 10x Cell Ranger ARC 2.0.0 演示数据的 analysis 包
+# Step 18: download the analysis bundles for four 10x Cell Ranger ARC 2.0.0
+# demonstration datasets.
 # =============================================================================
-# 参考 link 集（feature_linkage.bedpe）与完整 peak 集（每簇差异可及性输出）都在
-# 这个包里。10x 不单独发布 feature_linkage.bedpe（该路径返回 403）。
+# These bundles are the source of the reference link sets the paper compares
+# against. Both pieces live inside them: feature_linkage.bedpe, and the complete
+# peak set, which has to be recovered from the per-cluster differential
+# accessibility output. 10x does not publish feature_linkage.bedpe on its own --
+# that path returns 403 -- so the whole bundle is the only route.
 #
-# 用法：bash code/analysis/p5_18_download_arc_refs.sh [目标目录]
-# 默认目标：refs/arc（已在 .gitignore 中）
-# 合计约 1.31 GB。
+# Usage: bash code/analysis/p5_18_download_arc_refs.sh [target dir]
+# Default target: refs/arc, which is gitignored. About 1.31 GB in total.
 # =============================================================================
 set -euo pipefail
 OUT="${1:-refs/arc}"

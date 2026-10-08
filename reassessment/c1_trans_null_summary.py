@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""N1 汇总：trans 零假设的稳定性与染色体敏感性。
+"""Summarise the trans-null validation: stability and chromosome sensitivity.
 
-输出三块：
-  A  10 次独立 trans 配对下位置 OR 的分布（看它是否取决于某一次配对）
-  B  留一染色体 jackknife（看它是否被个别染色体主导）
-  C  高信息量档上的表现（观测应明显带位置信息，trans 不应当）
+Three blocks:
+  A  the spread of the positional odds ratio over ten independent trans
+     pairings, which says whether the result depends on one particular draw
+  B  a leave-one-chromosome-out jackknife, which says whether one chromosome
+     is driving it
+  C  behaviour at the highest nucleus number, where the observed set should
+     clearly carry positional information and the trans set should not -- a
+     null that fails here is not a usable null
 
-用法：
+Usage:
   python3 c1_trans_null_summary.py --grid n1_trans_validation.csv
 """
 from __future__ import annotations
@@ -20,15 +24,22 @@ import pandas as pd
 
 
 def ha_or(a: float, b: float, c: float, d: float) -> float:
-    """Haldane–Anscombe 校正的 OR。"""
+    """Haldane-Anscombe corrected odds ratio.
+
+    The +0.5 keeps the ratio finite when a cell is empty, which happens at the
+    low rungs where few links survive.
+    """
     return ((a + .5) * (d + .5)) / ((b + .5) * (c + .5))
 
 
 def arm_of(r: pd.Series) -> str:
+    # These strings are written into the deposited CSV and matched downstream by
+    # the figure script, so they are data, not display text.
     return "single-cell" if r.linker == "single_cell" else "ArchR 默认"
 
 
 def parse_chrom(v) -> Dict[str, List[int]]:
+    """Per-chromosome counts round-trip through the CSV as a repr'd dict."""
     return literal_eval(v) if isinstance(v, str) else (v or {})
 
 

@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # =============================================================================
-# P5 步骤 19 · 四个参考 link 集在指定窗口下重算启动子富集 OR
+# Step 19: recompute the four reference link sets at a stated window.
 # =============================================================================
-# 背景：主分析 p5_08_claimA_features.py 用 WINDOW = 500_000，而四个参考集
-# （data/derived_results/p5_promoterOR_*.csv）全是 window = 1000000。
-# 正文把 0.663 与 2.45–4.01 并列比较，两者窗口不同。此脚本在同一窗口重算。
+# Why this exists. The main analysis (p5_08_claimA_features.py) uses a 500 kb
+# window, but the four reference sets were originally computed at 1 Mb. Placing
+# 0.663 next to 2.45-4.01 therefore compared numbers from different windows,
+# and the odds ratio depends on the window by nearly twofold. This script
+# recomputes the references at whatever window is asked for, so the comparison
+# is like for like.
 #
-# 用法：
+# The superseded 1 Mb outputs are kept under
+# data/derived_results/superseded_inconsistent_window/ rather than deleted, so
+# the record of what was originally reported stays intact.
+#
+# Usage:
 #   bash code/analysis/p5_19_recompute_refs_at_window.sh 500000
-#   bash code/analysis/p5_19_recompute_refs_at_window.sh 1000000   # 复现旧值做对照
+#   bash code/analysis/p5_19_recompute_refs_at_window.sh 1000000   # reproduce the old values
 # =============================================================================
 set -euo pipefail
 WIN="${1:-500000}"
@@ -32,11 +39,14 @@ for tgz in "$ARC"/*_analysis.tar.gz; do
   bedpe=$(find "$d" -name 'feature_linkage.bedpe' | head -1)
   [[ -n "$bedpe" ]] || { echo "  [FATAL] $s 里找不到 feature_linkage.bedpe"; exit 1; }
 
-  # 完整 peak 集：SI 说取自每簇差异可及性输出的 Feature ID 列（列出全部 peak）
+  # The complete peak set is the background the odds ratio is computed against.
+  # 10x does not ship it directly; as the supplementary methods note, it is
+  # recovered from the Feature ID column of the differential accessibility
+  # output, which lists every peak regardless of significance.
   peaks="$d/peaks_all.bed"
   if [[ ! -s "$peaks" ]]; then
-    # 完整 peak 集在 analysis/clustering/<atac|gex>/*/differential_accessibility.csv，
-    # 每个都列出全部 peak。优先用 ATAC graphclust。
+    # Any clustering under analysis/clustering/<atac|gex>/*/ carries the full
+    # peak list. Prefer ATAC graphclust; fall back to whichever exists.
     da="$d/analysis/clustering/atac/graphclust/differential_accessibility.csv"
     [[ -s "$da" ]] || da=$(find "$d" -name 'differential_accessibility.csv' | head -1)
     [[ -n "$da" && -s "$da" ]] || { echo "  [FATAL] $s 里找不到差异可及性输出"; exit 1; }

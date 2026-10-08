@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
 """
-P5 步骤 A2-a · 抽取等细胞数等深度的对照细胞子集（稀疏输出）
-============================================================
-实现预注册偏离 D1 + D2：
-  D1  link 检测的观测单位从"供体"改为"细胞"，强制等细胞数 + 等深度
-  D2  N=200→150，先按深度阈值筛再随机抽（N=200 会把统一深度压到
-      ATAC 736 fragment，非零率 0.35%，`redundancy` 退化为全 0）
+Extract the equalised control-nucleus subset (sparse output)
+===========================================================
+Implements two pre-registration deviations:
+  D1  the unit of observation for link detection moves from donor to nucleus,
+      with nucleus count and depth both forced equal
+  D2  N drops from 200 to 150, and nuclei are filtered on depth before being
+      sampled. At N=200 the common depth collapses to 736 ATAC fragments, a
+      non-zero rate of 0.35%, and the per-gene link measure degenerates to all
+      zeros -- so the larger N measures nothing.
 
-本版相对上一版的三处工程改动（都是被实际卡住后改的）：
-  1. **稀疏输出**。稠密 200,791 × 3,750 int32 = 3.0 GB，下游每次载入都爆内存。
-     改存 COO 三元组后约 150 MB，A2-b 可以按细胞类型逐块重建。
-  2. **三个种子共用一次扫描**。先取三个种子选中细胞的并集扫一遍，
-     再按种子切片。30 GB 的 ATAC 文件从扫 3 遍变成扫 1 遍。
-  3. **断点续跑**（--time-budget，退出码 3 = 请再调用一次），
-     用于有超时限制的环境。
+Three engineering choices, each forced by something that actually broke:
+  1. SPARSE output. Dense 200,791 x 3,750 int32 is 3.0 GB and exhausted memory
+     on every downstream load. Stored as COO triples it is about 150 MB, and
+     A2-b can rebuild one cell type at a time.
+  2. ONE scan shared by all three seeds. Scan the union of the three seeds'
+     selected nuclei once, then slice per seed. Turns three passes over a 30 GB
+     ATAC file into one.
+  3. RESUMABLE (--time-budget; exit code 3 means "call me again"), for
+     environments that impose a wall-clock limit.
 
-用法：
+Usage:
   python3 p5_07_extract_cells.py --data DIR --out results --seeds 0,1,2
   python3 p5_07_extract_cells.py --data DIR --out results --seeds 0,1,2 --cells-only
-  # 有超时限制时反复调用同一命令直到退出码 != 3
+  # under a wall-clock limit, re-run the same command until the exit code is not 3
   python3 p5_07_extract_cells.py --data DIR --out results --seeds 0,1,2 --time-budget 25
 """
 
@@ -33,20 +38,23 @@ import numpy as np
 import pandas as pd
 
 
-# ---------------------------------------------------------------- 选细胞
+# ---------------------------------------------------------------- selection
 def pick_cells(hc, targets, n_per_type, seed, verbose=True):
     """
-    D2 + D3：按**联合**深度阈值筛，再在合格细胞中随机抽 N。
+    Filter on a JOINT depth threshold, then sample N from what qualifies.
 
-    ⚠️ D3 修正的 bug：D2 初版对 ATAC 与 RNA 各自算一个边际阈值
-    （每个由不同的细胞类型决定），但细胞必须**同时**满足两者。
-    两个边际阈值的交集比任一个都严，导致 6 个抑制性类型凑不满 N，
-    被迫退回"取最深的 N 个"，于是 25% 的细胞低于降采样目标，
-    类型间深度比 1.95× —— 等深度这个前提本身就没做到。
+    The bug this fixes is worth recording. The first version computed a marginal
+    threshold for ATAC and another for RNA, each set by whichever cell type was
+    limiting for that modality. But a nucleus has to clear BOTH. The intersection
+    of two marginal thresholds is stricter than either one, so six inhibitory
+    types could not reach N and fell back to "take the N deepest" -- leaving 25%
+    of nuclei below the downsampling target and a 1.95x depth ratio between cell
+    types. The equal-depth premise was simply not met.
 
-    正确做法：对缩放因子 t 做二分搜索，令阈值 (t·a0, t·r0) 同时施加，
-    找出使**每个类型都有 ≥N 个合格细胞**的最大 t。
-    实测 N=150 时 t=0.342（ATAC≥5,564，RNA≥5,254），回退类型 = 0。
+    The fix: binary search a single scale factor t, apply the thresholds
+    (t*a0, t*r0) jointly, and take the largest t for which EVERY cell type still
+    has at least N qualifying nuclei. At N=150 that gives t=0.342, i.e. ATAC
+    >= 5,564 and RNA >= 5,254, with zero types falling back.
     """
     a0 = float(hc.nCount_ATAC.median())
     r0 = float(hc.nCount_RNA.median())
@@ -75,8 +83,11 @@ def pick_cells(hc, targets, n_per_type, seed, verbose=True):
             e = e.assign(_rk=e.groupby("ID").cumcount())
             sel = e.sort_values("_rk").head(n_per_type).drop(columns="_rk")
         else:
-            # 合格细胞不足才退回"取最深的 N 个" —— 这在这些类型里引入了
-            # 与其他类型方向不同的选择偏倚，必须在论文里点名
+            # Falling back to "take the N deepest" only when too few qualify.
+            # This introduces a selection bias in those cell types that points
+            # the opposite way from the others, so it must be named in the
+            # paper rather than passed over. The binary search above exists so
+            # that this branch is never taken in the published run.
             sel = sub.nlargest(min(n_per_type, len(sub)), "nCount_ATAC")
             fallback.append(ct)
         out.append(sel.assign(celltype=ct))
@@ -93,12 +104,15 @@ def pick_cells(hc, targets, n_per_type, seed, verbose=True):
     return pd.concat(out, ignore_index=True), ex, D_atac, D_rna
 
 
-# ------------------------------------------------------- 单次扫描抽列（稀疏）
+# ------------------------------------------------- single-pass sparse column extraction
 def extract_sparse(mtx_path, keep_lut, n_keep, ckpt, time_budget,
                    chunk_bytes=1 << 26):
     """
-    扫描 mtx，只保留 keep_lut>=0 的列，返回 COO 三元组 (rows, cols, vals)。
-    keep_lut[原列号] = 新列号（-1 表示丢弃）。
+    Stream the MatrixMarket file, keeping only columns with keep_lut >= 0.
+
+    keep_lut[original column] = new column index, or -1 to discard. A dense
+    lookup array rather than a dict, since it is consulted once per non-zero
+    entry. Returns COO triples (rows, cols, vals).
     """
     R, C, V = [], [], []
     seen, offset0 = 0, None
@@ -157,7 +171,11 @@ def extract_sparse(mtx_path, keep_lut, n_keep, ckpt, time_budget,
 
 
 def downsample_sparse(rows, cols, vals, n_cols, target, rng):
-    """按列多项降采样到 target。返回新的三元组与未达标列。"""
+    """Multinomially downsample each column to `target`.
+
+    Returns the new triples plus the columns that were already below target,
+    which the caller checks must be empty.
+    """
     order = np.argsort(cols, kind="mergesort")
     rows, cols, vals = rows[order], cols[order], vals[order]
     bounds = np.searchsorted(cols, np.arange(n_cols + 1))
@@ -274,10 +292,13 @@ def main():
             keep = remap[c] >= 0
             rs, cs, vs = r[keep], remap[c[keep]], v[keep]
             tot = np.bincount(cs, weights=vs, minlength=len(idx))
-            # D3：目标取**选中细胞的最小总数**，保证 0 个未达标列 →
-            # 所有细胞降到完全相同的深度，类型间深度比恰为 1.000。
-            # 用 25% 分位会留下 25% 未达标细胞、类型间比值 1.95×，
-            # 等深度这个前提就没做到，后续 partial_r 门禁也失去意义。
+            # Target the MINIMUM total among the selected nuclei, which
+            # guarantees zero columns below target: every nucleus lands at
+            # exactly the same depth and the between-type depth ratio is 1.000.
+            # Using the 25th percentile instead would leave a quarter of nuclei
+            # under target and a 1.95x ratio between types -- the equal-depth
+            # premise unmet, and the downstream gate on partial correlation
+            # meaningless, since it would then be testing a depth confound.
             target = int(tot.min())
             rng = np.random.default_rng(s)
             rs, cs, vs, short = downsample_sparse(rs, cs, vs, len(idx), target, rng)

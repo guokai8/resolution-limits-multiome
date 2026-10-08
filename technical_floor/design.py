@@ -1,12 +1,17 @@
-"""把测得的下限换算成设计量。
+"""Turn the measured floors into quantities an experimenter can plan on.
 
-组成层：丰度为 p 的细胞类型，可分辨的最小组间差异是
+Composition: for a cell type of abundance p, the smallest resolvable
+between-group difference is
+
     F = z * kappa * sqrt(p(1-p)) * sqrt(2 / (D*N))
-反过来解 N，代价随 kappa 的平方增长。
 
-表达层：阈值直接由拟合的幂律给出。
+Solving for N instead shows the cost, which grows as kappa squared -- so a
+twofold error in kappa is a fourfold error in the nuclei you need to collect.
 
-两张表的作用是让下限在采数之前可用，而不是事后的告诫。
+Expression: the threshold comes straight from the fitted power law.
+
+The point of both tables is to make a floor usable before the data are
+collected, rather than a caution issued afterwards.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ DEFAULT_NUCLEI_LADDER: Sequence[int] = (25, 50, 100, 200, 500, 1000)
 def resolvable_difference(
     kappa: float, donors: int, nuclei_per_donor: int, config: FloorConfig = FloorConfig()
 ) -> float:
-    """返回可分辨的最小组间差异，单位百分点。"""
+    """The smallest resolvable between-group difference, in percentage points."""
     if donors <= 0 or nuclei_per_donor <= 0:
         raise ValueError("供体数与每供体细胞数都必须为正")
     p = config.abundance
@@ -41,7 +46,7 @@ def resolvable_difference(
 def nuclei_required(
     kappa: float, config: FloorConfig = FloorConfig(), target_pp: Optional[float] = None
 ) -> int:
-    """返回每组所需细胞数，以分辨 target_pp 个百分点的差异。"""
+    """Nuclei needed per group to resolve a difference of target_pp points."""
     p = config.abundance
     target = config.target_pp if target_pp is None else target_pp
     if target <= 0:
@@ -54,10 +59,12 @@ def composition_design_table(
     config: FloorConfig = FloorConfig(),
     designs: Iterable[tuple[int, int]] = DEFAULT_DESIGNS,
 ) -> pd.DataFrame:
-    """按供体数 x 每供体细胞数，给出可分辨差异。
+    """Resolvable difference over a grid of donors x nuclei per donor.
 
-    同时给出多项式界（kappa = 1）、合并 kappa，以及逐细胞类型的中位与最差
-    kappa——最后两列是论文只报合并值时看不到的东西。
+    Four columns, in increasing order of realism: the multinomial bound
+    (kappa = 1), the pooled kappa, and the median and worst cell type. The last
+    two are the ones a pooled kappa hides -- within one dataset they can differ
+    by more than the two cohorts differ from each other.
     """
     per = floor.per_celltype
     k_median = float(per.kappa.median()) if len(per) else floor.kappa
@@ -78,7 +85,7 @@ def composition_design_table(
 def composition_requirement(
     floor: CompositionFloor, config: FloorConfig = FloorConfig()
 ) -> pd.DataFrame:
-    """反向读法：分辨 target_pp 所需的每组细胞数。"""
+    """Read the other way: nuclei per group needed to resolve target_pp."""
     per = floor.per_celltype
     entries = [("multinomial bound", 1.0), ("pooled kappa", floor.kappa)]
     if len(per):
@@ -95,7 +102,11 @@ def composition_requirement(
 def expression_design_table(
     floor: ExpressionFloor, ladder: Sequence[int] = DEFAULT_NUCLEI_LADDER
 ) -> pd.DataFrame:
-    """按每细胞类型有效细胞数，给出 |log2 fold change| 的技术噪声阈值。"""
+    """|log2 fold change| noise thresholds over a ladder of effective n.
+
+    `extrapolated` flags any rung more than tenfold past the median effective n
+    actually observed, where the power law is no longer backed by data.
+    """
     return pd.DataFrame([
         {
             "n_eff": n,

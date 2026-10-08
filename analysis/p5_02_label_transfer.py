@@ -1,38 +1,51 @@
 #!/usr/bin/env python3
 """
-P5 门禁 α · FANS(TDP-43 High/Low) → Multiome 的病理标签迁移
-============================================================
-这是整个 Project 5 的成败点。若本脚本的留一供体 AUROC 中位数 < 0.65，
-命题 B 降级（见 PROJECT_5_MASTER.md §7 R1）。
+Transfer pathology labels from sorted FANS nuclei to the multiome data
+=====================================================================
+A gate, not a convenience: if the leave-one-donor-out median AUROC falls below
+0.65, the claim that depends on these labels is downgraded.
 
-要解决的不是"跑一个分类器"，而是三个会让审稿人一票否决的问题：
+The hard part is not fitting a classifier. It is three problems that would each
+be sufficient grounds for rejection:
 
-  1. 先验偏移 —— FANS 是**分选**的，High:Low = 7189:5036 ≈ 59:41 是人为比例。
-     真实组织里核内 TDP-43 低的核占比未知且远低于此。直接套用会系统性高估。
-     → Saerens-Latinne-Decaestecker EM  +  BBSE (Lipton et al., ICML 2018)
+  1. PRIOR SHIFT. FANS nuclei are SORTED, so high:low = 7189:5036 ~ 59:41 is an
+     artefact of the gate. The true fraction of nuclei with low nuclear TDP-43
+     in tissue is unknown and far lower. Applying the classifier directly would
+     overestimate it systematically.
+     -> Saerens-Latinne-Decaestecker EM, plus BBSE (Lipton et al., ICML 2018)
+        as an independent second estimate.
 
-  2. 域偏移 —— 分选流程本身改变转录组（FANS 有 percent.soup 列，多组学没有）。
-     → 本脚本提供 (a) 基线：仅 HVG + 标准化
-                  (b) 生产环境应换成 scVI / DANN 潜空间，接口已留出
+  2. DOMAIN SHIFT. Sorting itself changes the transcriptome; FANS carries a
+     percent.soup column that the multiome data does not have.
+     -> this script provides (a) a baseline of highly variable genes plus
+        standardisation, and leaves the interface open for (b) an scVI or DANN
+        latent space in production.
 
-  3. 可信度 —— 审稿人第一句话必然是"你的标签是编的"。
-     → 共形预测 (Mondrian / class-conditional)：给每个核一个覆盖率有保证的
-       预测集。下游分析**只用**预测集为单元素的核，并报告被弃用的比例。
+  3. CREDIBILITY. The first thing a reviewer will say is that the labels are
+     invented.
+     -> conformal prediction, class-conditional (Mondrian), giving each nucleus
+        a prediction set with a coverage guarantee. Downstream analysis uses
+        ONLY nuclei whose prediction set is a singleton, and reports the
+        fraction discarded.
 
-验证协议（缺一不可，见 §B1）：
-  - 留一供体交叉验证（LODO），报告 AUROC / AUPRC / **校准曲线**
-  - 按细胞类型分层的 AUC
-  - 阴性对照 1：置换标签 → AUC 应回到 0.5
-  - 阴性对照 2：少突胶质（不受 TDP-43 病理影响）→ AUC 应显著低于兴奋性神经元
+Validation protocol, all of it required:
+  * leave-one-donor-out cross-validation, reporting AUROC, AUPRC and the
+    CALIBRATION curve
+  * AUC stratified by cell type
+  * negative control 1: permute the labels; AUC must return to 0.5
+  * negative control 2: oligodendrocytes, which TDP-43 pathology does not
+    affect; AUC must be clearly below that of excitatory neurons
 
-用法：
-  # 自检（合成数据，验证 EM/BBSE/共形三件套的实现正确性，不碰真实数据）
+Usage:
+  # self-test on synthetic data: checks the EM, BBSE and conformal
+  # implementations without touching real data
   python3 p5_02_label_transfer.py --selftest
 
-  # 真实运行
+  # real run
   python3 p5_02_label_transfer.py --data DIR --out out/ --celltype Exc_LINC00507
 
-依赖：仅 numpy。生产环境建议把 fit_logreg 换成 sklearn / scVI —— 接口一致。
+Depends on numpy only. In production, swap fit_logreg for sklearn or scVI --
+the interface is the same.
 """
 
 import argparse
@@ -43,8 +56,8 @@ import numpy as np
 
 
 # ==========================================================================
-# 1. 分类器（numpy-only 的 L2 正则 logistic regression，Adam）
-#    生产环境替换点：任何提供 predict_proba 的模型都可以插进来
+# 1. Classifier: L2-regularised logistic regression in pure numpy, Adam.
+#    The swap point for production -- anything offering predict_proba fits here.
 # ==========================================================================
 def fit_logreg(X, y, l2=1e-3, epochs=300, lr=0.05, seed=0):
     rng = np.random.default_rng(seed)
@@ -69,14 +82,20 @@ def predict_proba(X, w, b):
 
 
 # ==========================================================================
-# 2. 先验偏移校正
+# 2. Prior-shift correction
 # ==========================================================================
 def em_label_shift(p_source, prior_source, tol=1e-8, max_iter=1000):
     """
-    Saerens-Latinne-Decaestecker EM。
-    p_source: 源域训练的分类器在**目标域**上的 P(y=1|x)
-    prior_source: 源域的 P(y=1)（FANS 里是分选造成的人为比例）
-    返回 (估计的目标域先验, 重标定后的后验)
+    Saerens-Latinne-Decaestecker EM for prior shift.
+
+    Args:
+        p_source: P(y=1|x) from the source-trained classifier, evaluated on the
+            TARGET domain.
+        prior_source: P(y=1) in the source domain -- here an artefact of the
+            sort, not a property of tissue.
+
+    Returns:
+        (estimated target prior, recalibrated posteriors).
     """
     pi = float(np.mean(p_source))
     for _ in range(max_iter):
@@ -95,9 +114,13 @@ def em_label_shift(p_source, prior_source, tol=1e-8, max_iter=1000):
 
 def bbse(y_cal, p_cal, p_target, thresh=0.5):
     """
-    Black Box Shift Estimation (Lipton, Wang & Smola, ICML 2018)。
-    用校准集上的混淆矩阵反解目标域的类别先验。与 EM 互为独立估计 ——
-    两者若不一致，说明标签偏移假设（P(x|y) 不变）本身可疑，必须报告。
+    Black Box Shift Estimation (Lipton, Wang & Smola, ICML 2018).
+
+    Inverts the calibration-set confusion matrix to recover the target-domain
+    class prior. It is an INDEPENDENT estimate of what EM returns: if the two
+    disagree, the label-shift assumption itself -- that P(x|y) is unchanged --
+    is in doubt, and that disagreement has to be reported rather than averaged
+    away.
     """
     yh_cal = (p_cal >= thresh).astype(int)
     C = np.zeros((2, 2))
@@ -116,26 +139,34 @@ def bbse(y_cal, p_cal, p_target, thresh=0.5):
 
 
 # ==========================================================================
-# 3. 共形预测（class-conditional / Mondrian），分布无关的覆盖率保证
+# 3. Conformal prediction (class-conditional / Mondrian): distribution-free coverage
 # ==========================================================================
 def mondrian_conformal_thresholds(y_cal, p_cal, alpha=0.10, w_cal=None):
     """
-    class-conditional (Mondrian) 共形阈值。
+    Class-conditional (Mondrian) conformal thresholds.
 
-    ⚠️⚠️ 关于可交换性 —— 这是本脚本最容易被误用的地方 ⚠️⚠️
+    EXCHANGEABILITY -- the easiest thing to get wrong here.
 
-    标准共形预测的覆盖率保证依赖**可交换性**：校准集与测试集同分布。
-    在本项目里这个假设是**明确违反**的：
-        校准集 = FANS 分选核（11 供体，NeuN+ 分选，有 percent.soup）
-        测试集 = Multiome 核（79 个**完全不同**的供体，未分选）
-    供体零重叠 + 实验流程不同 ⇒ 协变量分布不同 ⇒ **无权重时保证是空的**。
+    The coverage guarantee of standard conformal prediction rests on
+    exchangeability: the calibration and test sets are drawn from the same
+    distribution. In this project that assumption is plainly VIOLATED.
 
-    正确做法：传入 w_cal = 似然比 p_target(x)/p_source(x)，做加权共形
-    （Tibshirani, Barber, Candès & Ramdas, *Conformal Prediction Under
-    Covariate Shift*, NeurIPS 2019）。似然比用一个"域判别器"
-    （FANS vs Multiome 的二分类器）估计：w(x) = d(x)/(1-d(x)) · (n_s/n_t)。
+        calibration set = FANS sorted nuclei, 11 donors, NeuN+ sorted, carrying
+                          percent.soup
+        test set        = multiome nuclei, 79 COMPLETELY DIFFERENT donors,
+                          unsorted
 
-    w_cal=None 时退化为标准共形，并**打印警告**。不要在真实数据上这么用。
+    Zero donor overlap and a different protocol means a different covariate
+    distribution, and without weights the guarantee is empty.
+
+    The correct route is to pass w_cal, the likelihood ratio
+    p_target(x)/p_source(x), and do weighted conformal prediction (Tibshirani,
+    Barber, Candes & Ramdas, Conformal Prediction Under Covariate Shift,
+    NeurIPS 2019). The ratio is estimated with a domain discriminator -- a
+    classifier of FANS against multiome -- as w(x) = d(x)/(1-d(x)) * (n_s/n_t).
+
+    With w_cal=None this degrades to standard conformal and PRINTS A WARNING.
+    Do not use it that way on real data.
     """
     if w_cal is None:
         print("  [WARN] 未提供似然比权重 → 退化为标准共形。"
@@ -152,7 +183,8 @@ def mondrian_conformal_thresholds(y_cal, p_cal, alpha=0.10, w_cal=None):
             k = int(np.ceil((n + 1) * (1 - alpha)))
             qs[cls] = float(np.sort(s)[min(k, n) - 1])
         else:
-            # 加权分位数：把测试点的质量放在 +inf 处（Tibshirani et al. 的构造）
+            # Weighted quantile, placing the test point's mass at +inf, as in
+            # Tibshirani et al.'s construction
             w = np.asarray(w_cal, dtype=float)[m]
             o = np.argsort(s)
             s_sorted, w_sorted = s[o], w[o]
@@ -165,8 +197,11 @@ def mondrian_conformal_thresholds(y_cal, p_cal, alpha=0.10, w_cal=None):
 
 def domain_likelihood_ratio(X_source, X_target, l2=1e-2, seed=0, clip=(0.05, 20.0)):
     """
-    用域判别器估计 w(x) = p_target(x)/p_source(x)，供加权共形使用。
-    返回 source 样本上的权重。裁剪防止极端权重支配分位数。
+    Estimate w(x) = p_target(x)/p_source(x) with a domain discriminator.
+
+    Returns the weights on the source samples, for weighted conformal
+    prediction. Clipped, because a handful of extreme weights would otherwise
+    dominate the quantile and make the interval meaningless.
     """
     X = np.vstack([X_source, X_target])
     y = np.concatenate([np.zeros(len(X_source)), np.ones(len(X_target))])
@@ -182,21 +217,27 @@ def domain_likelihood_ratio(X_source, X_target, l2=1e-2, seed=0, clip=(0.05, 20.
 
 
 def conformal_sets(p, qs):
-    """返回 (含 0?, 含 1?)。只有单元素预测集的核才进入下游分析。"""
+    """Returns (contains 0?, contains 1?). Only nuclei whose prediction set is a
+    singleton enter the downstream analysis."""
     return (1.0 - (1.0 - p)) <= qs[0], (1.0 - p) <= qs[1]
 
 
 # ==========================================================================
-# 4. 指标
+# 4. Metrics
 # ==========================================================================
 def auroc(y, p):
     """
-    Mann-Whitney U 形式的 AUROC，含并列值的平均秩处理。
+    AUROC in Mann-Whitney U form, with average ranks for ties.
 
-    ⚠️ 这里曾经有一个 bug：先把 y 按 p 排序、却用原始顺序的秩数组去索引它。
-       结果是在完全可分的合成数据上返回 0.51 —— 一个"看起来像没有信号"的值，
-       正好是最难被发现的那种错误。自检因此必须断言 AUROC 高，而不只是
-       断言下游的 EM/共形"看起来正常"。
+    This function once carried a bug worth remembering: y was sorted by p, but
+    then indexed with a rank array in the ORIGINAL order. On perfectly
+    separable synthetic data it returned 0.51 -- a value that looks exactly
+    like "no signal", which is the hardest kind of error to notice.
+
+    That is why the self-test must assert the AUROC is HIGH, rather than only
+    asserting that the downstream EM and conformal steps look reasonable: a
+    classifier with no signal at all will still let EM converge to a
+    plausible-looking prior.
     """
     y = np.asarray(y).astype(int)
     p = np.asarray(p, dtype=float)
@@ -206,7 +247,7 @@ def auroc(y, p):
     order = np.argsort(p, kind="mergesort")
     ranks = np.empty(len(p), dtype=float)
     ranks[order] = np.arange(1, len(p) + 1, dtype=float)
-    # 并列值取平均秩
+    # Average ranks for ties
     sp = p[order]
     i = 0
     while i < len(sp):
@@ -230,7 +271,9 @@ def calibration_curve(y, p, bins=10):
 
 
 def ece(y, p, bins=10):
-    """Expected Calibration Error —— 只报 AUC 不报 ECE 是不够的。"""
+    """Expected Calibration Error. Reporting AUC without ECE is not enough: a
+    model can rank well and still be badly miscalibrated, and the prior-shift
+    correction depends on calibration."""
     c = calibration_curve(y, p, bins)
     if not c:
         return np.nan
@@ -239,7 +282,7 @@ def ece(y, p, bins=10):
 
 
 # ==========================================================================
-# 5. 留一供体交叉验证
+# 5. Leave-one-donor-out cross-validation
 # ==========================================================================
 def lodo_cv(X, y, donor, l2=1e-3, seed=0):
     rows = []
@@ -259,7 +302,8 @@ def lodo_cv(X, y, donor, l2=1e-3, seed=0):
 
 
 # ==========================================================================
-# 自检：合成一个带**已知**先验偏移的场景，验证三件套实现正确
+# Self-test: synthesise a scenario with a KNOWN prior shift and check all three
+# components recover it
 # ==========================================================================
 def selftest():
     rng = np.random.default_rng(0)
@@ -317,18 +361,23 @@ def selftest():
     print(f"    被弃用的核        = {1-singleton.mean():.3f}   ← 必须在文中报告")
 
     # ------------------------------------------------------------------
-    # 第二个场景：协变量偏移（这才是 FANS→Multiome 的真实处境）
-    # 目的：证明**不加权的共形会丢失覆盖**，加权能补回来
+    # Second scenario: covariate shift, which is the real FANS-to-multiome
+    # situation. The point is to show that UNWEIGHTED conformal loses coverage
+    # and the weighted version recovers it.
     # ------------------------------------------------------------------
     print()
     print("-" * 70)
     print("场景 2：协变量偏移下的共形覆盖（FANS→Multiome 的真实处境）")
     print("-" * 70)
-    # 构造真正的协变量偏移：从同一个 P(y|x) 的总体里按 exp(g * x·v) 做倾斜抽样。
-    # 这样 (a) P(y|x) 严格不变，(b) 对数密度比在 x 上是**线性**的，
-    # 因此逻辑回归域判别器是正确设定的 —— 这是公平的检验，不是给加权版放水。
-    # 取 v 沿分类方向且 g<0：目标域富集"看起来不那么像阳性"的点，
-    # 于是阳性类的 nonconformity 系统性变大 → 源域分位数偏小 → 覆盖不足。
+    # Construct a genuine covariate shift: tilt-sample from one population with
+    # a single P(y|x), weighting by exp(g * x.v). That makes (a) P(y|x) exactly
+    # unchanged and (b) the log density ratio LINEAR in x, so the logistic
+    # domain discriminator is correctly specified. This is a fair test, not one
+    # rigged in the weighted version's favour.
+    # Taking v along the classification direction with g < 0 enriches the target
+    # domain for points that look less positive, so positive-class
+    # nonconformity grows systematically, the source quantile comes out too
+    # small, and coverage falls short.
     Xp, yp = draw(400_000, TRUE_TGT_PRIOR)
     v = mu1 / np.linalg.norm(mu1)
     logt = -1.6 * (Xp @ v)
@@ -343,9 +392,11 @@ def selftest():
     w_cal = domain_likelihood_ratio(Xc, Xt2, seed=1)
     qs_w = mondrian_conformal_thresholds(yc, pc, alpha=alpha, w_cal=w_cal)
 
-    # ⚠️ 只看**总体**覆盖率会被多数类淹没：先验 0.08 时，阴性类几乎必然被覆盖，
-    #    总体覆盖率永远好看。真正要看的是**阳性类（病理核）的 class-conditional
-    #    覆盖率** —— 那才是下游结论依赖的那一类。
+    # Overall coverage is drowned by the majority class: at a prior of 0.08 the
+    # negative class is covered almost by construction and the overall number
+    # always looks fine. What matters is the CLASS-CONDITIONAL coverage of the
+    # positive class -- the pathological nuclei the downstream conclusion rests
+    # on.
     def cov_of(qs, cls):
         i0, i1 = conformal_sets(pt2, qs)      # 用与阈值同源的未重标定分数
         hit = np.where(yt2 == 1, i1, i0)
@@ -366,8 +417,9 @@ def selftest():
               "支撑重叠的区域（裁剪极端权重对应的核）；(c) 如实报告"
               "有效样本量 ESS = (Σw)²/Σw² 而不是名义核数。")
 
-    # 断言必须包含"分类器本身有效"这一条。只断言 EM/共形的表现是不够的：
-    # 一个完全无信号的分类器也能让 EM 收敛到一个看似合理的先验。
+    # The assertions must include that the classifier itself works. Asserting
+    # only on EM and conformal behaviour is not enough: a classifier with no
+    # signal will still let EM converge to a plausible-looking prior.
     auc_t = auroc(yt, pt)
     checks = [
         ("分类器在目标域可分 (AUROC > 0.90)", auc_t > 0.90),
@@ -389,30 +441,38 @@ def selftest():
 
 
 # ==========================================================================
-# 真实数据入口（骨架）
+# Real-data entry point (skeleton)
 # ==========================================================================
 def run_real(args):
     """
-    真实运行需要的输入（本函数只做接线，特征构建请按需实现）：
+    Inputs a real run needs. This function is wiring only; build the features
+    to suit the data at hand.
 
-      FANS 端   : FANS_Dataset_RNA_counts_raw.mtx  (525 MB, 可全量载入)
-                  FANS_Dataset_Metadata.txt        (TDP43 列 = 标签, Sample_donor = 分组)
-      Multiome 端: Multiome_Dataset_RNA_counts_raw.mtx  (需按细胞类型抽取子集)
-                  Multiome_Dataset_Metadata.txt
+      FANS side     : FANS_Dataset_RNA_counts_raw.mtx (525 MB, loads whole)
+                      FANS_Dataset_Metadata.txt (TDP43 column = label,
+                      Sample_donor = grouping)
+      multiome side : Multiome_Dataset_RNA_counts_raw.mtx (subset by cell type)
+                      Multiome_Dataset_Metadata.txt
 
-    ⚠️ 三个必须先做的前置检查（做完才允许往下走）：
-      1. 基因名对齐：两份 features.tsv 的交集大小与顺序（FANS 39万? vs Multiome 35,367）
-      2. 细胞类型标签对齐：FANS 的 ID_WNN_L2/L2.5 与 Multiome 的 WNN_L2/L2.5
-         取值集合是否一致（列名不同但取值应可映射）
-      3. 供体是否重叠：FANS 的 ID 形如 FC2/FC21，Multiome 形如 ALS29 ——
-         **若两批供体不重叠，这是纯粹的跨供体外推，AUC 目标应下调，
-         且必须在文中明写。若部分重叠，重叠供体必须全部留作测试集。**
+    Three checks that must pass before anything downstream is allowed to run:
+      1. gene name alignment: size and order of the intersection of the two
+         features.tsv files
+      2. cell-type label alignment: do FANS ID_WNN_L2/L2.5 and multiome
+         WNN_L2/L2.5 take the same value set? The column names differ but the
+         values should map.
+      3. donor overlap: FANS IDs look like FC2/FC21, multiome like ALS29. IF
+         THE TWO DONOR SETS DO NOT OVERLAP this is pure cross-donor
+         extrapolation, the AUC target must be lowered, and that must be stated
+         in the text. If they partly overlap, every overlapping donor must be
+         held out as test.
 
-    特征建议（从弱到强，依次尝试并报告）：
-      (a) HVG log-CPM z-score                      —— 基线
-      (b) (a) + 回归掉 percent.soup / nCount       —— 去除分选流程的痕迹
-      (c) scVI 潜空间（把 dataset 作为 batch 协变量）—— 生产环境首选
-      (d) DANN 对抗式域适配 (Ganin, ICML 2015)      —— 上限，但需调参
+    Feature options, weakest to strongest; try in order and report each:
+      (a) highly variable gene log-CPM z-scores            -- baseline
+      (b) (a) with percent.soup and nCount regressed out   -- removes the
+                                                              sorting signature
+      (c) scVI latent space, dataset as a batch covariate  -- production choice
+      (d) DANN adversarial domain adaptation (Ganin, ICML 2015) -- the ceiling,
+                                                              but needs tuning
     """
     sys.exit(
         "run_real 是骨架。请先完成 docstring 中的三项前置检查"

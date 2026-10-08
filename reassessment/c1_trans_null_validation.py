@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
-"""N1：验证 trans 配对零假设。
+"""Validate the trans-pairing null.
 
-跨方法的 Layer 3 论证现在很依赖这个零假设，所以它本身需要检验。三件事：
+The cross-procedure Layer 3 argument now rests on this null, so the null itself
+has to be tested rather than assumed. Three questions:
 
-1. **对单次配对是否敏感。** 同一批核、同一深度下重复抽取 10 次独立的 trans 配对，
-   看位置 OR 的离散程度。若某一次配对恰好把某个基因配到一个富含启动子的窗口，
-   结论不应随之改变。
-2. **是否被个别染色体主导。** 用每条染色体的分解做留一法 jackknife。
-3. **在高信息量的数据上是否按预期表现。** 在核数最高的档上，观测集合应当明显
-   带位置信息而 trans 集合不应当；如果零假设在那里也给出大的位置 OR，它就是坏的。
+1. Does it depend on one particular pairing? Ten independent trans pairings are
+   drawn on the same nuclei at the same depth, and the spread of the positional
+   odds ratio across them is measured. If one draw happens to pair a gene into
+   a promoter-rich window, the conclusion must not move with it.
 
-rep 0 复用主网格已有的结果，这里只补 rep 1..9。
+2. Is it driven by one chromosome? A leave-one-chromosome-out jackknife, using
+   the per-chromosome decomposition.
 
-用法：
+3. Does it behave as expected where there is plenty of information? At the
+   highest nucleus number the observed set should carry clear positional
+   information and the trans set should not. A null that returns a large
+   positional odds ratio there is a broken null.
+
+rep 0 reuses the main grid's existing output by filename, so only reps 1-9 are
+actually run here.
+
+Usage:
   python3 c1_trans_null_validation.py --dir <d> --out trans_validation.csv
 """
 from __future__ import annotations
@@ -44,7 +52,8 @@ def path_for(d: Path, n: int, linker: str, k: int, archr: bool,
     tag += "_matched"
     tag += "" if null == "none" else f"_{null}"
     tag += "" if rep == 0 else f"_rep{rep}"
-    # rep 0 与主网格同名，直接复用
+    # rep 0 deliberately produces the same filename as the main grid, so that
+    # run is reused rather than repeated.
     return d / f"c1_{CELLTYPE}_n{n}_s{SEED}_{tag}.json"
 
 

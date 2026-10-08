@@ -1,26 +1,35 @@
 #!/usr/bin/env python3
 """
-P5 制图 · Fig 2（可迁移性对照）与 Fig 5（诊断参考区间）
-========================================================
-这两张是 v2 提纲里**全新**的主图，取代 v1 已撤回的"两层标度分离"。
+Superseded matplotlib figure script, kept for provenance
+=======================================================
+The published figures come from the R/ggplot2 scripts under figures/. This file
+is retained because it is the version that produced the figures circulated
+during the analysis, and because its panel-by-panel notes record why several
+panels are laid out the way they are.
 
-Fig 2 —— 全文的核心视觉论证：**同一版式，两个相反的结果**
-  a  L2：两队列拟合线**平行**——斜率相同（−0.507 vs −0.505），
-        截距不同（4.79 vs 3.65）。⚠️ 不是"重合"：
-        "指数可迁移、系数不可迁移"正是本文主张，标注写错会被一眼看穿。
-  b  L1：两队列的拟合线**分开**（−0.152 vs −0.584）
-  c  过度离散幅度两队列一致（4.28× vs 3.90×）——"复现的那一半"
-  ⭐ a/b 必须同轴同尺度，否则"重合 vs 分开"的对比会被版式吃掉。
+Figure 2 is the paper's central visual argument: one layout, two opposite
+results.
+  a  expression layer, two cohorts, fitted lines PARALLEL -- same exponent
+     (-0.507 against -0.505), different intercept (4.79 against 3.65).
+     Not COINCIDENT. "The exponent transfers, the coefficient does not" is the
+     claim, and an annotation that says otherwise would be seen through at once.
+  b  composition layer, the two cohorts' lines DIVERGE (-0.152 against -0.584)
+  c  overdispersion agrees between cohorts (4.28x against 3.90x) -- the half
+     that does replicate
+  Panels a and b must share axes and scale, or the layout itself will absorb
+  the parallel-against-divergent contrast the figure exists to show.
 
-Fig 5 —— 诊断的参考区间
-  a  6 个 link 集的 OR 森林图（5 外部 + 本项目），对数横轴，标出 OR=1
-  b  窗口敏感性：同一套 ±1.7 Mb 给 8.84、±1 Mb 给 5.40
-  c  SEA-AD 28 个 Multiome 文库：linkage vs (N×深度) 双对数，b=+0.42 未饱和
+Figure 5 is the diagnostic's reference range.
+  a  forest plot of odds ratios over six link sets, log axis, unity marked
+  b  window sensitivity: the same data gives 8.84 at +/-1.7 Mb and 5.40 at 1 Mb
+  c  28 external multiome libraries: linkage against (N x depth) on log-log,
+     exponent +0.42, no saturation
 
-⚠️ 只用 matplotlib，不引 seaborn（3 GB 机器 + 减少依赖）。
-⚠️ 缺文件时跳过对应面板并告警，不中断——各分析的产出时间不同。
+matplotlib only, no seaborn: fewer dependencies, and it ran on a 3 GB machine.
+A missing input skips its panel with a warning rather than aborting, because
+the analyses finished at different times.
 
-用法：
+Usage:
   python3 p5_16_figures.py --results results --out figures
 """
 
@@ -33,10 +42,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# 两队列固定配色，全文一致
+# Fixed cohort colours, consistent across every figure
 C_ULM, C_SEA, C_NULL = "#1f4e79", "#c0504d", "#7f7f7f"
 
-# 已发表/已算定的常数（来源见 decisions/）
+# Constants already published or already settled upstream
 ULM = dict(L1_b=-0.152, L1_ci=(-0.340, 0.111), L2_b=-0.507, L2_ci=(-0.569, -0.441),
            L2_a=4.79, od=4.28)
 SEA = dict(L1_b=-0.584, L1_ci=(-0.838, -0.369), L2_b=-0.505, L2_ci=(-0.524, -0.483),
@@ -52,7 +61,8 @@ OR_SETS = [  # (标签, OR, lo, hi)  —— 升序，本项目置于最下以突
 
 
 def col(df, *cands):
-    """⚠️ 各分析脚本的列名不同（floor / median_abs_log2FC），逐个试。"""
+    """Column names differ between the analysis scripts (floor against
+    median_abs_log2FC), so try each in turn."""
     if df is None:
         return None
     for c in cands:
@@ -63,7 +73,8 @@ def col(df, *cands):
 
 
 def loglog_panel(ax, datasets, ylab, title, ann):
-    """datasets: [(label, color, x, y, b, ci)]。同轴同尺度。"""
+    """datasets: [(label, color, x, y, b, ci)]. Shared axes and scale, which is
+    what makes the two panels comparable."""
     for lab, cc, x, y, b, ci in datasets:
         if x is not None and y is not None:
             m = np.isfinite(x) & np.isfinite(y) & (x > 0) & (y > 0)
@@ -74,7 +85,8 @@ def loglog_panel(ax, datasets, ylab, title, ann):
                        rasterized=True)
         xs = np.array([np.nanmin(x), np.nanmax(x)]) if x is not None and len(x) \
             else np.array([1e2, 1e4])
-        # 过拟合点云中位作截距，仅用于示意拟合线位置
+        # Median of the point cloud as the intercept; used only to place the
+        # illustrative line, never as an estimate
         if x is not None and len(x):
             a = np.exp(np.median(np.log(y) - b * np.log(x)))
         else:
@@ -94,7 +106,7 @@ def fig2(res, out):
     f = plt.figure(figsize=(12, 4.2))
     gs = f.add_gridspec(1, 3, width_ratios=[1, 1, .75], wspace=.42)
 
-    # ---- a: L2 两队列重合
+    # ---- a: expression layer, the two cohorts
     ax = f.add_subplot(gs[0])
     s2 = _first(res, "seaad_L2_obs.csv", "seaad_L2_pairs_genelevel.csv")
     u2 = _read(res, "p5_floor_scaling_pairs.csv")   # Ulm，名称若不同请改
@@ -108,7 +120,7 @@ def fig2(res, out):
     ], "Expression floor  (median |Δlog₂CPM|)",
         "a   Expression layer", "parallel:\nsame slope,\ndifferent intercept")
 
-    # ---- b: L1 两队列分开（与 a 同尺度）
+    # ---- b: composition layer, the two cohorts diverge (same scale as a)
     ax2 = f.add_subplot(gs[1])
     s1 = _read(res, "seaad_L1_pairs.csv")
 
@@ -121,7 +133,7 @@ def fig2(res, out):
     ], "Composition discrepancy  (standardised)",
         "b   Composition layer", "divergent:\nslopes differ")
 
-    # ---- c: 过度离散幅度一致（"复现的那一半"）
+    # ---- c: overdispersion agrees -- the half that does replicate
     ax3 = f.add_subplot(gs[2])
     ax3.bar([0, 1], [ULM["od"], SEA["od"]], color=[C_ULM, C_SEA], width=.55)
     ax3.axhline(1, ls="--", lw=1, color="k")
@@ -141,7 +153,7 @@ def fig5(res, out):
     f = plt.figure(figsize=(12, 4.2))
     gs = f.add_gridspec(1, 3, width_ratios=[1.15, .7, .9], wspace=.38)
 
-    # ---- a: OR 森林图
+    # ---- a: odds-ratio forest plot
     ax = f.add_subplot(gs[0])
     ys = np.arange(len(OR_SETS))[::-1]
     for y, (lab, o, lo, hi) in zip(ys, OR_SETS):
@@ -157,7 +169,7 @@ def fig5(res, out):
     ax.set_title("a   Reference range across link sets", loc="left",
                  fontsize=11, fontweight="bold")
 
-    # ---- b: 窗口敏感性
+    # ---- b: window sensitivity
     ax2 = f.add_subplot(gs[1])
     ax2.bar([0, 1], [5.40, 8.84], color=["#1f4e79", "#9dc3e6"], width=.55)
     ax2.set_xticks([0, 1]); ax2.set_xticklabels(["±1 Mb\n(matched)", "±1.7 Mb\n(own)"])
@@ -166,7 +178,7 @@ def fig5(res, out):
     for i, v in enumerate([5.40, 8.84]):
         ax2.text(i, v + .2, f"{v:.2f}", ha="center", fontsize=9)
 
-    # ---- c: linkage 饱和曲线
+    # ---- c: linkage saturation curve
     ax3 = f.add_subplot(gs[2])
     lib = _read(res, "seaad_L3_libraries.csv")
     if lib is not None and {"n_cells", "link", "atac_frag"} <= set(lib.columns):
@@ -192,12 +204,14 @@ def fig5(res, out):
 
 
 def fig3(res, out):
-    """零模型对照 + 类型内分层。⚠️ 全文最重要的自证：b≈−0.5 是零模型期望。"""
+    """Null-model comparison and within-type stratification. The paper's most
+    important self-check: b near -0.5 is what the null model predicts, so the
+    exponent alone is not evidence of anything."""
     f = plt.figure(figsize=(12, 4.2))
     gs = f.add_gridspec(1, 3, width_ratios=[1, .8, 1.15], wspace=.42)
     o = _read(res, "seaad_L2_obs.csv"); n = _read(res, "seaad_L2_null.csv")
 
-    # a: 实测 vs 零模型
+    # a: observed against the null model
     ax = f.add_subplot(gs[0])
     for d, lab, c, b in ((o, "Observed", C_SEA, -0.505),
                          (n, "Sampling null", C_NULL, -0.482)):
@@ -217,7 +231,7 @@ def fig3(res, out):
                  fontsize=11, fontweight="bold")
     ax.legend(fontsize=8, frameon=False, loc="lower left")
 
-    # b: 逐对比值 —— 信息全在这里
+    # b: the per-pair ratio, which is where all the information is
     ax2 = f.add_subplot(gs[1])
     if o is not None and n is not None:
         j = o.merge(n, on=["donor", "ct"], suffixes=("_o", "_m"))
@@ -232,13 +246,14 @@ def fig3(res, out):
     ax2.set_title("b   Excess over pure sampling", loc="left",
                   fontsize=11, fontweight="bold")
 
-    # c: 类型内斜率森林图
+    # c: forest plot of within-type slopes
     ax3 = f.add_subplot(gs[2])
     st = _read(res, "seaad_L2_by_celltype.csv")
     if st is not None:
         st = st.sort_values("b")
         ys = np.arange(len(st))
-        # ⚠️ 跨度最大者估得最准，单独标出——含未解释的神经元陡斜率
+        # The widest-span types are the best determined, so they are labelled
+        # separately -- including the unexplained steep neuronal slopes
         wide = st.span >= st.span.quantile(.85)
         ax3.scatter(st.b, ys, s=[34 if w else 16 for w in wide],
                     color=[C_ULM if w else C_SEA for w in wide], zorder=3)
@@ -255,7 +270,8 @@ def fig3(res, out):
 
 
 def _first(res, *names):
-    """⚠️ 不能写 `_read(a) or _read(b)` —— DataFrame 的真值判断会抛异常。"""
+    """Cannot be written as _read(a) or _read(b): the truth value of a DataFrame
+    raises rather than being falsy when empty."""
     for n in names:
         p = os.path.join(res, n)
         if os.path.exists(p):
@@ -283,12 +299,13 @@ def _save(f, out, name):
 
 # ==================================================================== Fig 1
 def fig1(res, out, meta_dir=None):
-    """资源与设计。⚠️ a 面板需要 Well→Chip，来自原始元数据而非 results/。"""
+    """Resource and design. Panel a needs the well-to-chip mapping, which lives in
+    the raw metadata rather than in results/."""
     f = plt.figure(figsize=(13, 4.4))
     gs = f.add_gridspec(1, 4, width_ratios=[1.25, 1, 1.45, .85], wspace=.55)
     don = _read(res, "p5_fig1_donor_table.csv")
 
-    # a: 供体 × 芯片排布，标出跨芯片重复
+    # a: donor-by-chip layout, marking the cross-chip replicates
     ax = f.add_subplot(gs[0])
     m = None
     if meta_dir:
@@ -319,7 +336,7 @@ def fig1(res, out, meta_dir=None):
     ax.set_title("a   Donor × chip layout", loc="left", fontsize=11,
                  fontweight="bold")
 
-    # b: 质量维度 —— 重复 vs 非重复供体
+    # b: quality dimensions, replicated against non-replicated donors
     ax2 = f.add_subplot(gs[1])
     if don is not None and m is not None:
         rep = set((m.groupby("ID").Chip.nunique() >= 2).pipe(lambda s: s[s].index))
@@ -343,7 +360,8 @@ def fig1(res, out, meta_dir=None):
     ax2.set_title("b   Quality is unbiased", loc="left", fontsize=11,
                   fontweight="bold")
 
-    # c: 系统检索表 —— "只有一套数据"转为稀缺性论证
+    # c: the systematic search table, which turns "only one dataset exists"
+    # into an argument about scarcity rather than an admission
     ax3 = f.add_subplot(gs[2]); ax3.axis("off")
     rows = [("NIH-CARD PFC", "362 samples", "1 library/donor"),
             ("SEA-AD multiome", "28 libraries", "28 donors"),
@@ -362,7 +380,7 @@ def fig1(res, out, meta_dir=None):
         ax3.text(.60, y - .07, c, fontsize=7.5,
                  color=("#1f4e79" if ok else "#999"), transform=ax3.transAxes)
 
-    # d: 三层示意
+    # d: the three-layer schematic
     ax4 = f.add_subplot(gs[3]); ax4.axis("off")
     ax4.text(0, 1.06, "d   Three layers", fontsize=11, fontweight="bold",
              transform=ax4.transAxes)
@@ -388,13 +406,13 @@ def fig1(res, out, meta_dir=None):
 
 # ==================================================================== Fig 4
 def fig4(res, out):
-    """L3 下限。三条证据 + 功效曲线。"""
+    """The regulatory floor: three lines of evidence plus the power curve."""
     f = plt.figure(figsize=(13, 4.2))
     gs = f.add_gridspec(1, 4, width_ratios=[1, 1, 1.1, 1], wspace=.52)
     fe = _read(res, "p5_claimA_features.csv")
     bg = _read(res, "p5_gene_peak_window_counts.csv")
 
-    # a: 等化设计
+    # a: the equalised design
     ax = f.add_subplot(gs[0])
     cells = _read(res, "A2_cells_seed0.csv")
     if cells is not None and "celltype" in cells.columns:
@@ -409,11 +427,12 @@ def fig4(res, out):
     ax.set_title("a   Equalised design", loc="left", fontsize=11,
                  fontweight="bold")
 
-    # b: 每基因独立 link 数 —— 主变量恒为 0
+    # b: independent links per gene -- the primary variable is zero throughout
     ax2 = f.add_subplot(gs[1])
     if fe is not None and "redundancy" in fe.columns:
-        # ⚠️ 直方图是各类型的**均值**，红线是**中位数**——两个统计量，须分别标注，
-        #    否则读者会以为图内自相矛盾。
+        # The histogram shows per-type MEANS and the red line the MEDIAN. Two
+        # different statistics, so both must be labelled, or the panel looks
+        # self-contradictory.
         ax2.hist(fe.redundancy_mean, bins=14, color=C_ULM, alpha=.85,
                  label="mean per subtype")
         ax2.axvline(0, color="#c0504d", lw=2.2, label="median (all subtypes)")
@@ -426,7 +445,7 @@ def fig4(res, out):
     ax2.set_title("b   No between-subtype variance", loc="left", fontsize=11,
                   fontweight="bold")
 
-    # c: 启动子富集 OR + 功效曲线 —— ⭐ 决定性的一条
+    # c: promoter-enrichment odds ratio and the power curve -- the decisive panel
     ax3 = f.add_subplot(gs[2])
     n_link = np.logspace(2, 5, 120)
     p0 = 0.0095                      # 检验集中启动子邻近比例
@@ -444,7 +463,7 @@ def fig4(res, out):
     ax3.set_title("c   Power was ample", loc="left", fontsize=11,
                   fontweight="bold")
 
-    # d: 实测 OR —— 显著低于 1
+    # d: the measured odds ratio, significantly below 1
     ax4 = f.add_subplot(gs[3])
     ax4.barh([0], [0.663], xerr=[[0.663 - 0.568], [0.768 - 0.663]],
              color="#c0504d", height=.4, error_kw=dict(lw=1.5))

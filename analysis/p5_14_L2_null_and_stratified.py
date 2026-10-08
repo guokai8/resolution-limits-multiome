@@ -1,26 +1,35 @@
 #!/usr/bin/env python3
 """
-P5 审查 · L2 复现结果的两项必做检验（动笔前）
-================================================
-背景：SEA-AD 的 L2 给出 b=−0.505 [−0.524,−0.483]，与 Ulm 的 −0.507 几乎相同。
-在把它写成"跨队列可复现的标度律"之前，必须先排除两个使其失效的解释。
+Two checks the expression-layer replication must pass before it is written up
+============================================================================
+The Seattle atlas gives b = -0.505 [-0.524, -0.483], almost identical to the
+motor cortex's -0.507. Before calling that a scaling law that replicates across
+cohorts, two explanations that would void the claim have to be ruled out.
 
-检验 1 ⭐ **零模型**：b=−0.5 是不是这个统计量的数学必然？
-  做法：把每对文库的伪批量**用同一个共同谱**做多项式重抽样（保持各自实际深度），
-        再用完全相同的流程算 floor 与斜率。
-  · 若模拟 b ≈ −0.5 且残差量级与实测相当
-      → L2 的"复现"只是确认零模型成立，**不是发现**。
-        必须改写为"表达层的噪声与纯抽样不可区分"，并明说这是理论预期。
-  · 若模拟 b ≈ −0.5 但**截距 a 显著低于实测**
-      → 实测比纯抽样更嘈杂，超出部分是真实的技术噪声，a 有信息量。
-        → 这才支持"标定 a + 用 b=−0.5 外推"这个协议。
+CHECK 1, the null model: is b = -0.5 a mathematical inevitability of this
+statistic rather than a finding?
+  Method: resample each pair's pseudobulk multinomially from one shared
+  profile, at the libraries' own actual depths, and recompute the floor and the
+  slope through the identical pipeline.
+  * if the simulation gives b ~ -0.5 with residuals of comparable size, then
+    the "replication" merely confirms the null holds. It would have to be
+    rewritten as "expression-layer noise is indistinguishable from pure
+    sampling", stated as the theoretical expectation it is.
+  * if the simulation gives b ~ -0.5 but an INTERCEPT clearly below the
+    observed one, then the observations are noisier than pure sampling and the
+    excess is real technical noise. Only that supports the protocol of
+    calibrating a and extrapolating with b = -0.5.
 
-检验 2 ⭐ **类型内分层**：斜率是不是被"细胞类型丰度"这个混杂驱动的？
-  L2 的 n_eff 主要随细胞类型丰度变化，而类型本身有不同的生物学与噪声。
-  做法：在**每个细胞类型内部**拟合（此时 n 的变异只来自供体/文库），
-        看斜率是否仍集中在 −0.5。Ulm 的类型内中位是 −0.530。
+CHECK 2, stratification within cell type: is the slope driven by cell-type
+abundance as a confounder?
+  n_eff varies mainly with abundance, and abundance travels with different
+  biology and different noise. Method: fit WITHIN each cell type, where the
+  remaining variation in n comes only from donor and library, and see whether
+  the slope still concentrates near -0.5. The motor cortex's within-type median
+  is -0.530.
 
-用法（几秒，复用已存伪批量，不重跑 1–2 小时的扫描）：
+Usage (seconds; reuses stored pseudobulk rather than re-running the 1-2 hour
+scan):
   python3 p5_14_L2_null_and_stratified.py --pb results/seaad_pseudobulk_L2.npz
   python3 p5_14_L2_null_and_stratified.py --pb ... --pairs results/seaad_L2_pairs_genelevel.csv
 """
@@ -52,7 +61,10 @@ def fit(x, y, groups=None, n_boot=1000, seed=0):
 
 
 def floor_from_counts(c1, c2, min_cpm=0.0):
-    """与 p5_04 / p5_13 逐字一致的下限定义。"""
+    """The floor, defined exactly as in p5_04 and p5_13.
+
+    Duplicated rather than imported so the three cannot drift apart.
+    """
     t1, t2 = c1.sum(), c2.sum()
     if t1 <= 0 or t2 <= 0:
         return np.nan
@@ -96,7 +108,9 @@ def main():
         if np.isfinite(f) and f > 0:
             obs_rows.append(dict(donor=don, ct=ct, floor=f, n_eff=ne))
 
-        # ---- 零模型：共同谱 + 各自实际深度的多项式重抽样 ----
+        # ---- Null: one shared profile, resampled multinomially at each
+        # library's own actual depth, so depth and gene set are preserved and
+        # only the process variation is removed. ----
         pool = c1 + c2
         p = pool / pool.sum()
         nz = p > 0
@@ -110,7 +124,7 @@ def main():
     o, m = pd.DataFrame(obs_rows), pd.DataFrame(sim_rows)
     print(f"实测 {len(o):,} 对 / 零模型 {len(m):,} 对\n")
 
-    # ================================================= 检验 1：零模型
+    # ================================================= Check 1: the null model
     bo, cio = fit(o.n_eff, o.floor, o.donor.values)
     bm, cim = fit(m.n_eff, m.floor, m.donor.values)
     print("=" * 70)
@@ -123,7 +137,8 @@ def main():
           f"{f'[{cim[0,0]:.3f}, {cim[1,0]:.3f}]':>24}{np.exp(bm[1]):>10.2f}")
     ratio = np.exp(bo[1]) / np.exp(bm[1])
     print(f"\n⭐ 实测/零模型 的系数比 = {ratio:.2f}×")
-    # 逐对比值更稳健
+    # The per-pair ratio is more robust than comparing the two fitted
+    # intercepts, since it cancels anything shared within a pair.
     j = o.merge(m, on=["donor", "ct"], suffixes=("_o", "_m"))
     pr = (j.floor_o / j.floor_m)
     print(f"   逐对 floor 比值：中位 {pr.median():.2f}×  "
@@ -139,7 +154,7 @@ def main():
         print("     系数 a 有信息量 → 支持'一对重复标定 a + b=−0.5 外推'的协议。")
         print("     但 b 本身仍是理论预期，写作时必须明说，不可包装成新发现。")
 
-    # ============================================= 检验 2：类型内分层
+    # ============================================= Check 2: within cell type
     print("\n" + "=" * 70)
     print("检验 2 · 细胞类型内分层（排除'类型丰度'混杂）")
     print("=" * 70)

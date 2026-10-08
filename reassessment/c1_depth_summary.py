@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""V3 汇总：沿等乘积线检验"信息量只依赖 N × depth"还是"存在不可替代的 N 效应"。
+"""Does information depend only on N x depth, or is there an N effect?
 
-对每条等乘积线（N × depth 近似恒定），把 log(启动子 OR) 对 log(N) 回归：
+For each line of constant product, regress log(promoter OR) on log(N):
 
-  斜率 ≈ 0  →  信息量只依赖乘积，深度可以替代核数
-  斜率 > 0  →  同样的乘积下核数更多更好，核数不可被深度替代
+  slope ~ 0   information depends only on the product; depth substitutes for
+              nuclei, and a budget can be spent either way
+  slope > 0   at the same product, more nuclei is better; nuclei cannot be
+              replaced by depth
 
-同时给出纯核数线（1x 下变 N）与纯深度线（150 核下变深度）的斜率作参照：正文原来
-只有这两条线，而它们无法区分上面两种情形。
+The pure nucleus line (vary N at 1x) and the pure depth line (vary depth at 150
+nuclei) are reported alongside as a reference. Those are the two lines the main
+text originally had, and on their own they cannot tell the two cases apart --
+both rise, whichever is true.
 
-区间由种子的 bootstrap 给出（种子是重复计算抽样，按重复处理，不当独立层）。
+Intervals come from bootstrapping the seeds. The seeds are repeated
+computational draws of the same nuclei, so they are treated as repeated
+measures rather than as independent strata.
 
-用法：
+Usage:
   python3 c1_depth_summary.py --grid v3_depth_grid.csv
 """
 from __future__ import annotations
@@ -27,7 +33,11 @@ SEED = 0
 
 
 def mh(strata: List[Tuple[float, float, float, float]]) -> float:
-    """Mantel–Haenszel 合并 OR。"""
+    """Mantel-Haenszel pooled odds ratio over strata of (a, b, c, d).
+
+    Point estimate only; the interval comes from the seed bootstrap instead,
+    since the seeds are not independent strata.
+    """
     R = S = 0.0
     for a, b, c, d in strata:
         n = a + b + c + d
@@ -39,7 +49,7 @@ def mh(strata: List[Tuple[float, float, float, float]]) -> float:
 
 
 def or_for(g: pd.DataFrame) -> float:
-    """一个格子在三个种子上的合并启动子 OR（相对基因组背景）。"""
+    """Pooled promoter odds ratio for one grid cell over its three seeds."""
     strata = []
     for _, r in g.iterrows():
         a = float(r.prox_links)
@@ -123,7 +133,7 @@ def main() -> None:
         print(f"{label:<16s} {k:>4d} {s:>8.3f} {lo:>9.3f}–{hi:<9.3f}")
         out_lines.append(dict(line=label, n_points=k, slope=s, lo=lo, hi=hi))
 
-    # 纯深度线：150 核下 log(OR) ~ log(depth)
+    # Pure depth line: log(OR) on log(depth) at 150 nuclei
     cells = {}
     for m in (1.0, 2.0, 4.0, 8.0):
         g = obs[(obs.n == 150) & (obs.depth_mult == m)]

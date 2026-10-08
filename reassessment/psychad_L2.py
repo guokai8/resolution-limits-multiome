@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""PsychAD 的表达下限，口径与手稿 p5_14 逐字一致。
+"""Expression floor in the PsychAD replicates, matching p5_14 exactly.
 
-floor = median |log2(CPM1+1) - log2(CPM2+1)| 基因取并集 (CPM>0 任一)，≥200 基因
-零模型 = 合并 profile 按各自实际深度多项式重抽样，同一流程重算
+    floor = median over genes of |log2(CPM1+1) - log2(CPM2+1)|
+
+taken over the union of genes with CPM > 0 in either aliquot, requiring at
+least 200 of them.
+
+The matched null resamples both members multinomially from their pooled profile
+at their own observed depths, then runs the identical floor computation. It
+therefore differs from the observation in one respect only: it has no process
+variation. The ratio of the two is the quantity of interest.
+
+As in psychad_floors.py, these replicates span loading and library prep but not
+dissociation, which bounds what the measured floor can include.
 """
 from __future__ import annotations
 import argparse, json, logging, time
@@ -24,6 +34,15 @@ def read_obs(path, cols):
     return pd.DataFrame(out)
 
 def floor_from_counts(c1,c2,min_cpm=0.0):
+    """The expression floor for one pair of pseudobulk count vectors.
+
+    Union rule, not intersection: a gene counts when CPM > 0 in EITHER member.
+    An intersection would silently drop the genes that differ most between the
+    two libraries, which are exactly the ones the floor is meant to measure.
+
+    Returns NaN rather than raising when the pair is unusable, since scanning
+    many pairs will always turn up some that are.
+    """
     t1,t2=c1.sum(),c2.sum()
     if t1<=0 or t2<=0: return np.nan
     p1,p2=c1/t1*1e6, c2/t2*1e6
@@ -52,6 +71,9 @@ def main():
     keep=np.array([(d,m) in sel for d,m in zip(obs.donor_id,obs.mid)])
     types=sorted(obs[a.level].unique()); t_map={t:i for i,t in enumerate(types)}
     grp=sorted(sel); g_map={g:i for i,g in enumerate(grp)}
+    # Encode (aliquot, cell type) as one integer key per nucleus, -1 for the
+    # nuclei not in any selected pair. A single key lets the pseudobulk sum be
+    # done as one sparse matrix product per chunk instead of a Python loop.
     key=np.full(len(obs),-1,np.int64)
     idx=np.flatnonzero(keep)
     key[idx]=(np.array([g_map[(d,m)] for d,m in zip(obs.donor_id[idx],obs.mid[idx])])*len(types)
@@ -63,12 +85,15 @@ def main():
         NG=int(f["X"].attrs["shape"][1])
         dptr,ddat,didx=f["X/indptr"],f["X/data"],f["X/indices"]
         acc=np.zeros((NK,NG),np.float32); nc=np.zeros(NK,np.int64)
+        # Stream X in row chunks and accumulate group sums. The indptr slice is
+        # rebased to the chunk (ip-b) so each chunk builds a standalone CSR.
         for s0 in range(0,len(obs),a.chunk):
             s1=min(s0+a.chunk,len(obs)); k=key[s0:s1]; good=k>=0
             if not good.any(): continue
             ip=dptr[s0:s1+1]; b,e=int(ip[0]),int(ip[-1])
             M=sp.csr_matrix((ddat[b:e],didx[b:e],ip-b),shape=(s1-s0,NG))
             kk=k[good]
+            # G is a group-membership indicator; G @ M sums each group's rows.
             G=sp.csr_matrix((np.ones(kk.size,np.float32),(kk,np.flatnonzero(good))),shape=(NK,s1-s0))
             acc+=np.asarray((G@M).todense(),dtype=np.float32); nc+=np.bincount(kk,minlength=NK)
             if (s0//a.chunk)%40==0: logger.info("  %d/%d 行 (%.0fs)",s1,len(obs),time.time()-t0)
@@ -83,6 +108,9 @@ def main():
             c1,c2=acc[r1].astype(np.float64),acc[r2].astype(np.float64)
             f_=floor_from_counts(c1,c2)
             if not np.isfinite(f_): continue
+            # The matched null: draw both members from the pooled profile at
+            # their own observed totals, so depth and gene set are preserved and
+            # only the process variation is removed.
             pool=c1+c2; p=pool/pool.sum(); nz=p>0
             s1=np.zeros_like(c1); s2=np.zeros_like(c2)
             s1[nz]=rng.multinomial(int(c1.sum()),p[nz]); s2[nz]=rng.multinomial(int(c2.sum()),p[nz])

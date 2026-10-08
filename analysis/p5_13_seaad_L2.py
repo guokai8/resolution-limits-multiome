@@ -1,28 +1,31 @@
 #!/usr/bin/env python3
 """
-P5 外部验证 · SEA-AD 的 L2 表达层下限（与 Ulm 同口径）
-========================================================
-目的：`p5_12 --mode l1` 只能用元数据，L2 必须用基因层表达。
-本脚本从 31 GB 的 h5ad **流式**构建 (供体 × 文库 × 细胞类型) 伪批量，
-然后用**与 Ulm 完全相同的统计量**算 L2 下限：
+The expression floor in SEA-AD, computed exactly as in the primary cohort
+========================================================================
+p5_12 --mode l1 can work from metadata alone; the expression layer cannot,
+because it is defined across genes. This script builds (donor x library x cell
+type) pseudobulk by STREAMING the 31 GB h5ad, then applies the identical
+statistic:
 
-    floor = median_over_genes | log2CPM_lib1 − log2CPM_lib2 |
-    n_eff = 该类型在两文库中细胞数的调和平均
+    floor = median over genes of |log2 CPM_lib1 - log2 CPM_lib2|
+    n_eff = harmonic mean of this cell type's nuclei in the two libraries
 
-⚠️ 为什么不能用元数据里的总 UMI 代理（已用 Ulm 自测证明）：
-   真值 −0.507，UMI 代理只给 −0.248 —— 足以把"复现"误判为"未复现"。
+Why the metadata's total-UMI proxy will not do, demonstrated on the primary
+cohort's own data: the true exponent is -0.507 and the proxy returns -0.248 --
+enough to turn a replication into a non-replication.
 
-内存策略（3 GB 机器）：
-  * 累加器 float32，形状 (n_group × n_gene)。80 供体 ×2 库 ×24 类 ≈ 3840 组，
-    36k 基因 → 约 560 MB。若仍 OOM，用 `--donor-chunks K` 分 K 趟（各趟只
-    累加一部分供体，代价是多读 K 次文件）。
-  * 逐块读 CSR 的 data/indices，绝不整体载入 X。
+Memory strategy for a 3 GB machine:
+  * float32 accumulator of shape (n_group x n_gene). 80 donors x 2 libraries x
+    24 types is about 3,840 groups; at 36k genes that is roughly 560 MB. If
+    that still exhausts memory, --donor-chunks K splits it into K passes, each
+    accumulating some donors, at the cost of reading the file K times.
+  * read the CSR data and indices block by block; X is never loaded whole.
 
-用法：
-  # 1) 先探查（几秒，必做）——确认 X 是原始计数还是已归一化
+Usage:
+  # 1) inspect first (seconds, and mandatory): is X raw counts or normalised?
   python3 p5_13_seaad_L2.py --h5ad SEAAD_...h5ad --inspect
 
-  # 2) 再跑（按探查结果选 --layer）
+  # 2) then run, choosing --layer from what the inspection reported
   python3 p5_13_seaad_L2.py --h5ad SEAAD_...h5ad --layer raw --out results
 """
 
@@ -42,9 +45,9 @@ except ImportError:
 DONOR, BATCH, CTYPE = "Donor ID", "library_prep", "Subclass"
 
 
-# --------------------------------------------------------------- 读 obs
+# --------------------------------------------------------------- reading obs
 def read_obs(f, cols):
-    """从 h5ad 的 /obs 读若干列，正确还原 categorical。"""
+    """Read columns from an h5ad /obs, decoding categoricals correctly."""
     g = f["obs"]
     out = {}
     for c in cols:
@@ -88,15 +91,18 @@ def inspect(path):
             print("var 列:", list(f["var"].keys())[:20])
 
 
-# --------------------------------------------------------- 流式伪批量
+# --------------------------------------------------------- streaming pseudobulk
 def build_pseudobulk(path, xkey, gid, n_group, n_gene, chunk=8_000_000,
                      ckpt=None, ckpt_min=20.0):
     """
-    单趟流式扫描 CSR，累加 (group × gene) 计数。gid<0 的细胞跳过。
+    One streaming pass over the CSR, accumulating (group x gene) counts.
 
-    ⚠️ SEA-AD 的 nnz = 66 亿（解压约 79 GB），单趟 1–2 小时。
-       必须断点续跑——沿用 p5_01 的血泪教训：
-       checkpoint 写系统临时目录（不要写 iCloud，750 MB 会卡死）。
+    Cells with gid < 0 are skipped.
+
+    SEA-AD has 6.6 billion non-zeros, about 79 GB decompressed, so a single
+    pass takes one to two hours and must be resumable. Following the lesson
+    from p5_01, the checkpoint is written to the system temp directory -- not
+    to iCloud, where a 750 MB checkpoint stalls.
     """
     acc = np.zeros((n_group, n_gene), dtype=np.float32)
     start0 = 0
@@ -118,7 +124,7 @@ def build_pseudobulk(path, xkey, gid, n_group, n_gene, chunk=8_000_000,
         t0, start = time.time(), start0
         while start < nnz:
             stop = min(start + chunk, nnz)
-            # 该 nnz 区间覆盖的细胞行
+            # The cell rows this nnz span covers
             lo = int(np.searchsorted(ip, start, "right")) - 1
             hi = int(np.searchsorted(ip, stop, "left"))
             stop = int(ip[hi]) if hi <= n_cell else nnz    # 对齐到行边界
@@ -131,7 +137,8 @@ def build_pseudobulk(path, xkey, gid, n_group, n_gene, chunk=8_000_000,
             g = gid[rows]
             m = g >= 0
             if m.any():
-                # 合并重复 (group, gene) 键后散射累加，避免大临时数组
+                # Merge duplicate (group, gene) keys before scattering, so no
+                # temporary the size of the accumulator is ever allocated
                 key = g[m].astype(np.int64) * n_gene + j[m].astype(np.int64)
                 uk, inv = np.unique(key, return_inverse=True)
                 s = np.bincount(inv, weights=d[m].astype(np.float64))
@@ -161,15 +168,26 @@ def build_pseudobulk(path, xkey, gid, n_group, n_gene, chunk=8_000_000,
 # ------------------------------------------------------------------ L2
 def compute_L2(acc, meta, n_group, min_cpm):
     """
-    acc: (group × gene) 计数。meta: 每 group 的 donor/batch/ct/n_cells。
+    Compute the expression floor from accumulated counts.
 
-    ⚠️⚠️ 基因筛选必须与 Ulm 的 `p5_04` **逐字一致**：
-            keep = (x > 0) | (y > 0)        # 或
-    第一版这里写成了 `(cpm1>=1) & (cpm2>=1)`（且 + 阈值），
-    恰好剔除"一库有、另一库无"的基因——那正是 |Δlog2CPM| 最大的一批。
-    后果：下限被系统性压低（a=1.40 vs Ulm 4.79），且因**不同 n 下剔除比例不同**
-    而污染斜率（b=−0.371）。这不是"未复现"，是换了统计量。
-    → 这是本项目第 5 次同类错误：**下限只能与同口径的量比较**。
+    acc is (group x gene) counts; meta carries donor, batch, cell type and
+    nucleus count per group.
+
+    The gene filter must match the primary cohort's exactly:
+
+        keep = (x > 0) | (y > 0)      # union, not intersection
+
+    The first version here wrote (cpm1 >= 1) & (cpm2 >= 1), an intersection
+    with a threshold. That removes precisely the genes present in one library
+    and absent from the other -- the genes with the largest |delta log2 CPM|.
+    The floor was pushed down systematically (a = 1.40 against the primary
+    cohort's 4.79), and because the fraction removed varies with n, the slope
+    was contaminated too (b = -0.371). That was not a failed replication; it
+    was a different statistic.
+
+    This was the fifth instance of the same error in this project, and the rule
+    it enforces: a floor can only be compared with a floor computed the same
+    way.
     """
     tot = acc.sum(1, keepdims=True)
     ok = tot[:, 0] > 0
@@ -239,7 +257,8 @@ def main():
             xkey = "layers/UMIs" if "layers/UMIs" in f else "X"
         if xkey not in f:
             sys.exit(f"[FATAL] {xkey} 不存在。先跑 --inspect")
-        # 整数性检查——归一化数据算 CPM 会得到错的下限
+        # Integrality check: computing CPM from already-normalised values
+        # yields a wrong floor, silently
         s = f[xkey]["data"][:200000]
         if not np.allclose(s, np.round(s)):
             sys.exit(f"[FATAL] {xkey} 不是整数计数（已归一化）。"
@@ -251,7 +270,8 @@ def main():
 
     obs.columns = ["donor", "batch", "ct"][:len(obs.columns)]
     obs = obs.dropna()
-    # 只保留：该 (供体,文库) ≥min_cells 核，且该供体有 ≥2 个这样的文库
+    # Keep only (donor, library) pairs with at least min_cells nuclei, from
+    # donors having at least two such libraries
     lib = obs.groupby(["donor", "batch"]).size()
     lib = lib[lib >= args.min_cells]
     nlib = lib.reset_index().groupby("donor").batch.nunique()
@@ -285,7 +305,8 @@ def main():
         ck = os.path.join(args.ckpt_dir, "p5_13_seaad_L2.ckpt.npz")
         acc = build_pseudobulk(args.h5ad, xkey, gid, n_group, n_gene,
                                chunk=args.chunk, ckpt=ck)
-        # ⭐ 存下伪批量：换筛选口径时不必再跑 1–2 小时
+        # Store the pseudobulk, so changing the gene-filtering convention does
+        # not mean another 1-2 hour scan
         np.savez_compressed(pb, acc=acc, meta=meta.values,
                             meta_cols=np.array(meta.columns, dtype=object))
         print(f"  💾 伪批量已存 {pb}（下次加 --reuse-pseudobulk 秒出）")

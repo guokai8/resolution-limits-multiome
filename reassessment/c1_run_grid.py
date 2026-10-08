@@ -1,11 +1,24 @@
 #!/usr/bin/env python3
-"""C1 驱动脚本：把 single-cell 与 KNN 聚合两种 linker 在同一梯队上跑满，收成一张表。
+"""C1 driver: run both linkers over the whole ladder and collect one table.
 
-每个配置都跑两次：真实配对与 trans 零假设（基因配到异染色体基因的窗口）。
-诊断量是 OR_ratio = OR(观测) / OR(trans)：它衡量链接集合里**位置信息**的含量。
-已存在的 JSON 会跳过，所以脚本可以中断后继续。
+Two linkers -- single-nucleus correlation and KNN aggregation -- on identical
+nuclei at identical depth, so any difference between them is the procedure and
+nothing else.
 
-用法：
+Every configuration is run twice: once with the real gene-peak pairing and once
+against the trans null, where each gene is tested against the window of a gene
+on a different chromosome. The diagnostic is
+
+    OR_ratio = OR(observed) / OR(trans)
+
+which measures how much POSITIONAL information a link set carries, over and
+above what the windows alone would produce.
+
+Existing JSON is skipped, so the script resumes after an interruption. Each
+configuration is a subprocess rather than an import: a run that dies on one
+configuration must not take the grid with it.
+
+Usage:
   python3 c1_run_grid.py --dir results_methods/primary_ladder --out c1_grid.csv
 """
 from __future__ import annotations
@@ -74,7 +87,12 @@ def main() -> None:
     d = Path(a.dir)
 
     jobs = []
-    # 主网格：两臂 × 共享被检验集合 × 两个零假设
+    # Main grid: both arms, both nulls, with the tested gene-peak set held
+    # fixed between arms (--match-tested) so the arms differ only in how links
+    # are called, not in which pairs were eligible.
+    #
+    # The k <= n//3 guard keeps at least three aggregates per cell type; fewer
+    # than that and the correlation has too few points to mean anything.
     for ct, ns in LADDER.items():
         for n in ns:
             for seed in SEEDS:
@@ -82,12 +100,15 @@ def main() -> None:
                     jobs.append((ct, n, seed, "single", 0, True, null))
                     if K_MAIN <= n // 3:
                         jobs.append((ct, n, seed, "aggregate", K_MAIN, True, null))
-    # 原生检出规则（真跑 ArchR 会得到的集合）
+    # Without --match-tested: the set a real ArchR run would return, since it
+    # chooses its own eligible pairs. Run at two rungs as a cross-check that
+    # matching the tested set is not itself driving the comparison.
     for n in (150, 2400):
         for seed in SEEDS:
             for null in NULLS:
                 jobs.append(("Exc_LINC00507_FREM3", n, seed, "aggregate", K_MAIN, False, null))
-    # k 敏感性
+    # Aggregate-size sweep at one rung: how much of the result is set by this
+    # one analyst-chosen hyperparameter at fixed data.
     for k in K_SWEEP:
         if k <= 2400 // 3:
             for null in NULLS:

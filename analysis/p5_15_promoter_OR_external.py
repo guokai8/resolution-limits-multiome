@@ -1,26 +1,32 @@
 #!/usr/bin/env python3
 """
-P5 关键检验 · 启动子富集 OR 的阳性对照（cellranger-arc 官方 link 集）
-=====================================================================
-本项目最重要的一个检验。**它决定论文的上限。**
+Positive control for the promoter-enrichment diagnostic
+======================================================
+The single most important check in the project, because it sets a ceiling on
+what the paper can claim.
 
-我们在 150 细胞的 link 集上测到 OR = 0.663 [0.568, 0.768]（显著**耗竭**），
-并据此主张"细胞层 peak–gene 推断在可及细胞数下不可行"。
-但这个主张有一个致命的未验证前提：
+At 150 nuclei the link set gives OR = 0.663 [0.568, 0.768], a significant
+DEPLETION, and the paper reads that as evidence that nucleus-level peak-gene
+inference is not supported at attainable nucleus numbers. That reading rests on
+one unverified premise:
 
-    ⚠️ **这个诊断真的能检出信号吗？**
-       如果它在任何 link 集上都给 ~0.66，那 0.663 反映的是我们实现的问题，
-       整个 L3 结论作废。
+    Can this diagnostic detect signal at all?
 
-阳性对照：10x 官方 cellranger-arc 在 3,233 个核上产出的 link 集
-（human_brain_3k，134,081 个 peak，CC BY 4.0）。
-若此处 OR ≫ 1，诊断成立；若 OR ≈ 1，诊断作废。
+If it returned ~0.66 on every link set, then 0.663 would be a property of our
+implementation rather than of the data, and the whole Layer 3 conclusion would
+be void.
 
-⚠️⚠️ 口径必须与我们的分析逐字一致，否则就是第 6 次"拿不同口径的量比较"：
-  · 检验集 = 所有 (peak, TSS) 在 ±WINDOW 内的配对（WINDOW 从 bedpe 实测距离取）
-  · 启动子邻近 = |peak 中点 − TSS| <= 3 kb
-  · TSS 用**同一份** GENCODE v32 表（results/p5_tss_gencode_v32.csv）
-  · OR 用 Haldane–Anscombe 校正
+The control: the link set 10x's own cellranger-arc produces from 3,233 nuclei
+(human_brain_3k, 134,081 peaks, CC BY 4.0). An odds ratio well above 1 there
+means the diagnostic works; an odds ratio near 1 means it does not, and the
+Layer 3 result would have to be withdrawn.
+
+The conventions must match the main analysis exactly, or this becomes another
+comparison between quantities computed different ways:
+  * background = every (peak, TSS) pair within +/-WINDOW
+  * promoter proximity = |peak midpoint - TSS| <= 3 kb
+  * TSS from the SAME GENCODE v32 table (results/p5_tss_gencode_v32.csv)
+  * Haldane-Anscombe corrected odds ratio
 """
 
 import argparse
@@ -40,19 +46,23 @@ def load_bedpe(path):
                            "corr", "x", "y", "sig", "dist", "type"])
     pg = d[d.type.isin(["peak-gene", "gene-peak"])].copy()
     nm = pg.name.str.extract(r"^<([^>]*)><([^>]*)>")
-    # peak 锚点：peak-gene 时是 A，gene-peak 时是 B
+    # The peak anchor is side A for a peak-gene row and side B for a gene-peak
+    # row, so which columns to read depends on the row's orientation.
     isA = pg.type.values == "peak-gene"
     pg["peak_mid"] = np.where(isA, (pg.s1 + pg.e1) // 2, (pg.s2 + pg.e2) // 2)
     pg["chrom"] = np.where(isA, pg.c1, pg.c2)
     gname = np.where(isA, nm[1], nm[0])
-    # 去掉 10x 的后缀标记（_distal / _promoter / _intergenic）
+    # Strip 10x's suffix tags (_distal / _promoter / _intergenic) from the names
     pg["gene"] = pd.Series(gname, index=pg.index).str.replace(
         r"_(distal|promoter|intergenic)$", "", regex=True)
     return pg
 
 
 def build_tested(peaks, tss, window):
-    """所有 (peak, TSS) 在 ±window 内的配对数，及其中启动子邻近的数量。"""
+    """Count all (peak, TSS) pairs within +/-window, and how many are proximal.
+
+    This is the background the odds ratio is computed against.
+    """
     n_tot = n_prox = 0
     for ch, pk in peaks.groupby("chrom"):
         ts = tss[tss.chrom == ch]
@@ -70,7 +80,11 @@ def build_tested(peaks, tss, window):
 
 
 def odds_ratio(a, b, c, d, n_boot=2000, seed=0):
-    """a/b = 检出中 近端/远端；c/d = 检验集中 近端/远端。Haldane–Anscombe。"""
+    """Haldane-Anscombe corrected odds ratio.
+
+    a/b is proximal/distal among detected links; c/d is the same ratio in the
+    background. The +0.5 keeps the ratio finite when a cell is empty.
+    """
     or_ = ((a + .5) * (d + .5)) / ((b + .5) * (c + .5))
     rng = np.random.default_rng(seed)
     n1, p1 = a + b, (a + .5) / (a + b + 1)
@@ -103,10 +117,15 @@ def main():
     pg = load_bedpe(args.bedpe)
     print(f"{len(pg):,} 条 peak–gene link")
 
-    # 窗口：默认由实测距离取（cellranger-arc 默认 ±1 Mb），也可显式指定。
-    # ⚠️ 窗口同时界定背景集（build_tested）与检出集。旧版只用它算背景，
-    #    因为窗口恰好等于实测最大距离时所有 link 都在窗内，两者自动一致；
-    #    一旦显式收紧窗口，就必须同步过滤检出的 link，否则 2x2 表不自洽。
+    # Window: taken from the observed distances by default (cellranger-arc uses
+    # +/-1 Mb), or given explicitly.
+    #
+    # The window defines BOTH the background (build_tested) and the detected
+    # set. An earlier version applied it only to the background, which happened
+    # to be harmless while the window equalled the largest observed distance --
+    # every link was inside it anyway. The moment the window is tightened
+    # explicitly, the detected links must be filtered to match, or the 2x2 table
+    # is internally inconsistent and the odds ratio is wrong.
     if args.window > 0:
         window = args.window
         print(f"窗口（显式指定）: ±{window:,}")
@@ -114,7 +133,7 @@ def main():
         window = int(np.ceil(pg.dist.max() / 1e5) * 1e5)
         print(f"窗口（由 bedpe 实测最大距离定）: ±{window:,}")
 
-    # 检出 link 的启动子邻近判定：用**同一份 TSS**
+    # Proximity of detected links judged against the SAME TSS table
     t = tss.set_index("gene_name")
     hit = pg.gene.isin(t.index)
     print(f"  基因名可映射到 GENCODE v32: {hit.mean()*100:.1f}% "
@@ -127,7 +146,7 @@ def main():
     q = q[q.chrom == q.tchrom]
     q["d2tss"] = (q.peak_mid - q.tss).abs()
 
-    # 检出集必须与背景集用同一个窗口
+    # The detected set must use the same window as the background
     n_before = len(q)
     q = q[q.d2tss <= window]
     if n_before != len(q):

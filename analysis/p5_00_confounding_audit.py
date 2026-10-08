@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
 """
-P5 Fig 1 · 混杂审计
-====================
-在做任何差异分析之前，把 79 个供体的 年龄 × 性别 × 队列 × 分组 结构摊开。
+Confounding audit
+=================
+Lay out the age, sex, cohort and group structure of the 79 donors before any
+differential analysis is run.
 
-论文用 SVA 吸收了 PMI / 起病部位等隐藏变量。SVA 同时会吸收与分组共线的年龄效应，
-使得"疾病效应"与"年龄效应"不可分。本脚本量化这个共线性，并输出一个
-年龄匹配子集，供后续所有分析做敏感性复现。
+Why it comes first. The source study used SVA to absorb hidden variables such
+as post-mortem interval and site of onset. SVA will absorb an age effect that
+is collinear with group just as readily, which leaves "disease effect" and "age
+effect" inseparable after the fact. This script quantifies that collinearity up
+front and writes an age-matched subset that every downstream analysis can be
+re-run on as a sensitivity check.
 
-输入（只读，全部已在盘）：
-  Multiome_Dataset_Samples_Summary.txt   79 行，Case/Cohort/Sex/Age
-  Multiome_Dataset_Metadata.txt          180,016 行逐核元数据（供体 ID 在 col 13）
+Inputs, all read-only:
+  Multiome_Dataset_Samples_Summary.txt   79 rows: Case, Cohort, Sex, Age
+  Multiome_Dataset_Metadata.txt          180,016 per-nucleus rows; donor ID in
+                                         column 13
 
-输出：
-  out/p5_fig1_donor_table.csv            供体级汇总表
-  out/p5_fig1_agematched_donors.csv      年龄匹配子集的供体 ID 列表
-  out/p5_fig1_confounding_stats.txt      文字报告
+Outputs:
+  out/p5_fig1_donor_table.csv            donor-level summary
+  out/p5_fig1_agematched_donors.csv      donor IDs of the age-matched subset
+  out/p5_fig1_confounding_stats.txt      written report
 
-用法：
+Usage:
   python3 p5_00_confounding_audit.py --data /path/to/ResearchD --out out/
 """
 
@@ -31,9 +36,12 @@ import pandas as pd
 
 
 # --------------------------------------------------------------------------
-# 供体表：Samples_Summary 没有供体 ID，只有 Case/Cohort/Sex/Age，
-# 顺序与 Metadata 中的 ID 出现顺序不保证一致。因此以 Metadata 为准重建供体表，
-# 再用 Samples_Summary 做行数与分布的一致性校验。
+# Building the donor table is awkward and the awkwardness is worth stating.
+# Samples_Summary carries no donor ID at all -- only Case, Cohort, Sex and Age
+# -- and its row order is not guaranteed to match the order donor IDs first
+# appear in Metadata. So the donor table is rebuilt from Metadata, which does
+# carry IDs, and Samples_Summary is then used only to check that the row count
+# and the distributions agree.
 # --------------------------------------------------------------------------
 def build_donor_table(data_dir):
     meta_path = os.path.join(data_dir, "Multiome_Dataset_Metadata.txt")
@@ -53,9 +61,11 @@ def build_donor_table(data_dir):
                        median_nCount_ATAC=("nCount_ATAC", "median"))
                   .reset_index())
 
-    # Age / Cohort 只在 Samples_Summary 里。按 (Case, Sex) 分层做顺序配对，
-    # 这是唯一可用的连接方式 —— 若作者提供了带 ID 的临床表（Supp Data 1/2），
-    # 应改用那份表，本函数会在检测到 clinical.csv 时优先使用。
+    # Age and Cohort exist only in Samples_Summary, so they have to be joined
+    # positionally within (Case, Sex) strata. That is the only join available
+    # without donor IDs, and it is approximate. If a clinical table carrying IDs
+    # is supplied (the source study's Supplementary Data 1/2), it is strictly
+    # better; this function prefers clinical.csv whenever it is present.
     clin = os.path.join(data_dir, "p5_clinical_with_ID.csv")
     if os.path.exists(clin):
         c = pd.read_csv(clin)
@@ -69,7 +79,8 @@ def build_donor_table(data_dir):
     summ["Case"] = summ["Case"].replace({"Control": "HC"})
     summ["Age"] = pd.to_numeric(summ["Age"], errors="coerce")
 
-    # 分层顺序配对（近似；仅用于分布层面的审计，不用于逐供体建模）
+    # Positional pairing within strata. Approximate by construction, so it is
+    # used for distribution-level auditing only, never for per-donor modelling.
     donors = donors.sort_values(["Case", "Sex", "ID"]).reset_index(drop=True)
     summ = summ.sort_values(["Case", "Sex"]).reset_index(drop=True)
     matched = []
@@ -105,7 +116,7 @@ def confounding_report(donors, fh):
         p(f"  {case:10s} n={len(g):3d}  mean={a.mean():5.1f}  median={a.median():5.1f}"
           f"  IQR=[{a.quantile(.25):.0f},{a.quantile(.75):.0f}]  range={a.min():.0f}-{a.max():.0f}")
 
-    # 年龄 ~ 分组 的方差解释比例
+    # Fraction of age variance explained by group -- the collinearity measure
     grand = donors.Age.dropna().mean()
     ss_tot = ((donors.Age.dropna() - grand) ** 2).sum()
     ss_bet = sum(len(g.Age.dropna()) * (g.Age.dropna().mean() - grand) ** 2
@@ -137,8 +148,11 @@ def confounding_report(donors, fh):
 
 def age_matched_subset(donors, caliper=6.0, seed=0):
     """
-    最近邻年龄匹配（无放回，caliper 内），HC 匹配到 ALS。
-    返回匹配上的供体 ID。这是所有主结论的敏感性复现子集。
+    Nearest-neighbour age matching, without replacement, within a caliper.
+
+    Controls are matched to cases, not the other way round. Returns the matched
+    donor IDs, which form the sensitivity subset every main conclusion is
+    re-checked on.
     """
     rng = np.random.default_rng(seed)
     cases = donors[(donors.Case == "ALS") & donors.Age.notna()].copy()
@@ -180,7 +194,8 @@ def main():
                f"  → 全部主结论必须在这个子集里存活，否则改写为'部分由年龄介导'。")
         print(msg); print(msg, file=fh)
 
-        # 细胞类型 × 分组 的核数结构（功效均衡的输入）
+        # Nuclei per cell type by group. This is the input to any power
+        # balancing: cell types differ enormously in how many nuclei back them.
         ct = pd.crosstab(meta["WNN_L2.5"], meta["Case"])
         s = "\n--- 细胞类型 × 分组 核数（DEG 数比较前必须做的功效均衡输入）---\n"
         print(s + ct.to_string()); print(s + ct.to_string(), file=fh)

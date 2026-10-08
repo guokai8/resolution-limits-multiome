@@ -1,12 +1,19 @@
-"""组成层下限：过度离散系数 κ。
+"""The composition floor: the overdispersion factor kappa.
 
-论文的量：对每个 (供体, 细胞类型) 配对，
-    z       = |f1 - f2| / sqrt(p(1-p))
-    期望    = sqrt(2 / n_eff),  n_eff = 2 / (1/n1 + 1/n2)
-    κ       = RMS(z / 期望)
+For each (donor, cell type) pair,
 
-用 RMS 而不是中位数，是因为它聚合的是标准差之比。κ 随细胞类型变化很大，所以
-本模块既给合并值也给逐类型值——论文只报了前者，而后者才是设计时真正要用的。
+    z        = |f1 - f2| / sqrt(p(1-p))
+    expected = sqrt(2 / n_eff),  n_eff = 2 / (1/n1 + 1/n2)
+    kappa    = RMS(z / expected)
+
+RMS rather than a median, because what is being aggregated is a ratio of
+standard deviations and the squares are what add.
+
+kappa varies a great deal between cell types, so this module reports both the
+pooled value and the per-type values. The paper reports the pooled one; the
+per-type ones are what a design calculation actually needs, since cost scales
+as kappa squared and the spread within a dataset exceeds the spread between
+cohorts.
 """
 
 from __future__ import annotations
@@ -25,16 +32,18 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class CompositionFloor:
-    """组成层下限的估计结果。
+    """The estimated composition floor.
 
     Attributes:
-        kappa: 合并的过度离散倍数（全部配对的 RMS）。
-        kappa_lo: 自助下界。
-        kappa_hi: 自助上界。
-        per_celltype: 逐细胞类型的 κ 与平均丰度，按 κ 降序。
-        n_pairs: 参与估计的配对数。
-        n_donors: 参与估计的供体数。
-        abundance_r: κ 与 log 丰度的皮尔逊相关；正值表示丰富类型更离散。
+        kappa: the pooled overdispersion factor, the RMS over all pairs.
+        kappa_lo: lower bootstrap bound.
+        kappa_hi: upper bootstrap bound.
+        per_celltype: kappa and mean abundance per cell type, kappa descending.
+        n_pairs: pairs behind the estimate.
+        n_donors: donors behind the estimate.
+        abundance_r: Pearson correlation of kappa with log abundance. Positive
+            means commoner cell types are more overdispersed, which is the
+            pattern the paper reports and does not fully explain.
     """
 
     kappa: float
@@ -62,7 +71,7 @@ class CompositionFloor:
 
 
 def _zscores(df: pd.DataFrame) -> pd.DataFrame:
-    """由细胞计数算出 z、n_eff 与 z / 期望之比。"""
+    """Turn nucleus counts into z, n_eff and the ratio z / expected."""
     out = df.copy()
     tot1 = out.groupby("donor").n1.transform("sum")
     tot2 = out.groupby("donor").n2.transform("sum")
@@ -73,7 +82,8 @@ def _zscores(df: pd.DataFrame) -> pd.DataFrame:
     p = (f1 + f2) / 2.0
     out["n_eff"] = 2.0 / (1.0 / out.n1.clip(lower=1) + 1.0 / out.n2.clip(lower=1))
     denom = np.sqrt(p * (1.0 - p))
-    # p 为 0 或 1 时该细胞类型在两库都不存在（或占满），比值无定义
+    # p of 0 or 1 means the cell type is absent from both libraries, or fills
+    # them, and the ratio is undefined. NaN here, dropped by the caller.
     out["z"] = np.where(denom > 0, (f1 - f2).abs() / denom, np.nan)
     out["expected"] = np.sqrt(2.0 / out.n_eff)
     out["ratio"] = out.z / out.expected
@@ -88,22 +98,29 @@ def _rms(values: np.ndarray) -> float:
 def estimate_composition_floor(
     df: pd.DataFrame, config: FloorConfig = FloorConfig()
 ) -> CompositionFloor:
-    """由重复配对的细胞计数估计组成层下限。
+    """Estimate the composition floor from replicate-pair nucleus counts.
+
+    The bootstrap resamples donors, not pairs: pairs from one donor share a
+    dissociation and a library prep, so resampling pairs would understate the
+    interval.
 
     Args:
-        df: 长表，列为 donor, celltype, n1, n2。
-        config: 口径配置。
+        df: long-form table with donor, celltype, n1, n2 -- or with donor,
+            celltype, z, n_eff if the statistics are already computed.
+        config: the conventions to use.
 
     Returns:
-        CompositionFloor。
+        A CompositionFloor.
 
     Raises:
-        ValueError: 执行准则后没有可用配对。
+        ValueError: neither column set is present, or no usable pairs remain.
     """
     if {"n1", "n2"}.issubset(df.columns):
         work = _zscores(df).dropna(subset=["ratio"])
     elif {"z", "n_eff"}.issubset(df.columns):
-        # 预算好的形式：直接用沉积的 z 与 n_eff，不重建占比
+        # Precomputed form: use the deposited z and n_eff as they stand rather
+        # than rebuilding proportions, whose denominator depends on which cell
+        # types the original analysis included.
         work = df.copy()
         work["expected"] = np.sqrt(2.0 / work.n_eff)
         work["ratio"] = work.z / work.expected

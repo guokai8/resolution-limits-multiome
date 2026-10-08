@@ -45,8 +45,11 @@ FANS_LEVEL = {"WNN_L2.5": "ID_WNN_L25_Predicted",
 
 def load_fans(data_dir, level, drop_inconsistent=True, multi=None):
     """
-    ⚠️ 必须用 *_Predicted 列。FANS 元数据的 ID_WNN_L1..L4 六列是坏的
-    （每行的值都是前六列的**列名**字符串）。见 docs/04_DATA_NOTES.md。
+    Load the FANS metadata.
+
+    The *_Predicted columns must be used. The six ID_WNN_L1..L4 columns in this
+    file are corrupt: every row holds the column-name strings of the first six
+    columns rather than any annotation. See docs/04_DATA_NOTES.md.
     """
     fa = pd.read_csv(os.path.join(data_dir, "FANS_Dataset_Metadata.txt"),
                      sep="\t", dtype=str)
@@ -59,7 +62,8 @@ def load_fans(data_dir, level, drop_inconsistent=True, multi=None):
 
     n0 = len(fa)
     if drop_inconsistent and multi is not None and level != "WNN_L4":
-        # 用 Multiome 建立 L4 -> level 的真映射，过滤 FANS 中自相矛盾的核
+        # Build the authoritative L4 -> level mapping from the Multiome data,
+        # then use it to drop FANS nuclei whose own annotation contradicts it.
         m = (multi[["WNN_L4", level]].drop_duplicates().dropna()
              .set_index("WNN_L4")[level].to_dict())
         l4 = fa["ID_WNN_L4_Predicted"]
@@ -74,7 +78,12 @@ def load_fans(data_dir, level, drop_inconsistent=True, multi=None):
 
 
 def or_with_ci(tab_fn, groups, n_boot=2000, seed=0):
-    """tab_fn(group_subset) -> DataFrame[ct, a, b]；对 groups 做 bootstrap。"""
+    """Odds ratio with a bootstrap confidence interval.
+
+    tab_fn(group_subset) -> DataFrame[ct, a, b]. The bootstrap resamples
+    GROUPS -- donor pools -- rather than cells, because nuclei within a donor
+    are not independent observations.
+    """
     rng = np.random.default_rng(seed)
     point = tab_fn(groups)
     boots = []
@@ -114,12 +123,13 @@ def main():
           f"Low={int((fa.TDP43=='Low').sum())}，"
           f"{fa.Sample_donor.nunique()} 个供体池")
 
-    # ---- 基线：Multiome 的疾病供体 + 仅神经元（对齐 NeuN+ 分选）------------
+    # ---- Baseline: Multiome disease donors, neurons only, which is what
+    # matches the NeuN+ sort on the FANS side ----
     dis = mm[mm["Case"].isin(["ALS", "ALS_FTD"]) & (mm["WNN_L1"] == "Neuronal")]
     print(f"  Multiome 基线: {len(dis)} 个疾病供体的神经元核，"
           f"{dis.ID.nunique()} 个供体")
 
-    # 只保留两边都有、且 FANS 中细胞数够的神经元类型
+    # Keep neuronal types present on both sides with enough FANS nuclei
     fa_n = fa[fa["ct"].isin(set(dis[args.level]))]
     keep = [c for c, n in fa_n["ct"].value_counts().items()
             if n >= args.min_cells]
@@ -129,7 +139,9 @@ def main():
     if len(keep) < 4:
         print("  ⚠️ 类型数过少，命题 A 的回归几乎没有功效。")
 
-    # ---- 统计量 1：FANS 内部 Low vs High --------------------------------
+    # ---- Estimate 1: within FANS, TDP-43 low against high. Same tissue, same
+    # donors, same sort, so no external denominator is needed. The risk is that
+    # the high gate is not a random sample and may itself be composition-biased.
     def internal(pools):
         d = fa_n[fa_n.Sample_donor.isin(pools)]
         t = pd.crosstab(d["ct"], d["TDP43"]).reindex(keep).fillna(0)
@@ -137,7 +149,7 @@ def main():
             if c not in t:
                 t[c] = 0
         a, b = t["Low"].astype(float), t["High"].astype(float)
-        # Haldane-Anscombe 校正，避免 0 导致 OR 发散
+        # Haldane-Anscombe correction, so an empty cell cannot send the OR to infinity
         orr = ((a + .5) / (b + .5)) / (((a.sum() - a) + .5) /
                                        ((b.sum() - b) + .5))
         return pd.DataFrame({"n_High": t["High"], "n_Low": t["Low"], "OR": orr})
@@ -146,7 +158,10 @@ def main():
     r1 = or_with_ci(internal, sorted(fa_n.Sample_donor.unique()),
                     n_boot=args.n_boot)
 
-    # ---- 统计量 2：FANS-Low vs Multiome 疾病神经元组成 -------------------
+    # ---- Estimate 2: FANS-low against the neuronal composition of disease
+    # donors in the unsorted Multiome data. Independent denominator, but the two
+    # sides come from different protocols. Agreement between the two estimates
+    # is the evidence; disagreement must be reported, not resolved by picking. --
     low = fa_n[fa_n.TDP43 == "Low"]
     base = dis[args.level].value_counts().reindex(keep).fillna(0).astype(float)
 
