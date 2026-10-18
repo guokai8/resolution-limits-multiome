@@ -12,15 +12,20 @@ donor-matched process replicates from four cohorts.
 
 ## Scope of this repository
 
-**Scripts only.** No data, no figures, no tables. Every input is either public
-and documented below, or deposited with the manuscript as supplementary data.
+**Scripts, plus the minimum needed to verify them.** No figures, no derived
+tables, no primary data. Every input is either public and documented below, or
+deposited with the manuscript as supplementary data.
 
-That means nothing here runs end to end out of the box: each script needs
-inputs you have to obtain first. What the repository gives you is the exact
-procedure, including the conventions that turn out to matter and the mistakes
-that were made and corrected along the way. Two of the three constants in the
-paper do not transfer between datasets, so the procedure is the part worth
-publishing.
+The one exception is `data/example_inputs/` (41 KB): the two replicate-pair
+tables the estimator is validated against. They are kept here so that
+`technical_floor` and its test suite run out of the box, without which neither
+can be checked.
+
+Everything else needs inputs you have to obtain first. What the repository
+gives you is the exact procedure, including the conventions that turn out to
+matter and the mistakes that were made and corrected along the way. Two of the
+three constants in the paper do not transfer between datasets, so the procedure
+is the part worth publishing.
 
 ## Getting the inputs
 
@@ -48,6 +53,8 @@ reassessment/        later analyses: PsychAD split aliquots, the Layer 3
 figures/             figure generation (R / ggplot2), shared theme in
                      fig_common.R
 technical_floor/     the packaged floor estimator (see its own README)
+tests/               its test suite; asserts the published values
+data/example_inputs/ the two tables those tests and the worked example run on
 ```
 
 ### Analysis pipeline
@@ -116,8 +123,8 @@ numbers.
 
 ```bash
 python3 -m technical_floor \
-  --composition your_composition_pairs.csv \
-  --expression  your_expression_floors.csv \
+  --composition data/example_inputs/motor_cortex_composition_pairs.csv \
+  --expression  data/example_inputs/motor_cortex_expression_floors.csv \
   --out results/
 ```
 
@@ -126,8 +133,20 @@ expression scaling fit, and the design tables derived from both.
 `technical_floor/README.md` documents the input formats. Requires only `numpy`
 and `pandas`.
 
-The paper's own per-pair tables are deposited as Supplementary Tables 2, 3 and
-10, and running the tool on them reproduces every published value.
+The example inputs are the paper's own deposited tables, so the command above
+reproduces every published value -- which is also the acceptance test:
+
+```bash
+python3 -m unittest tests.test_technical_floor -v   # 24 tests
+```
+
+One of those tests, `test_the_pair_criterion_changes_the_answer`, asserts that
+skipping the minimum-nuclei criterion returns the superseded exponent -0.507
+rather than the published -0.497. It exists so that failure mode cannot come
+back silently.
+
+Point the same two flags at your own replicate-pair tables to measure the
+floors in your data.
 
 Read `composition_kappa_by_celltype.csv` before the pooled kappa. Across cell
 types kappa varied 5.6-fold within the primary cohort against 1.1-fold between
