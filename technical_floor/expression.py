@@ -58,16 +58,17 @@ class ExpressionFloor:
     def threshold(self, n_eff: float) -> float:
         """The |log2 fold change| noise threshold at a given effective n."""
         if n_eff <= 0:
-            raise ValueError("n_eff 必须为正")
+            raise ValueError("n_eff must be positive")
         return float(self.coefficient * n_eff ** self.exponent)
 
     def summary(self) -> str:
         return "\n".join([
-            f"表达层下限 = {self.coefficient:.2f} × n^{self.exponent:.3f} "
-            f"(指数 95% CI {self.exponent_lo:.3f}–{self.exponent_hi:.3f})",
-            f"  基于 {self.n_obs} 个观测 / {self.n_donors} 个供体，"
-            f"有效细胞数中位 {self.median_n_eff:.0f}",
-            "  纯多项式抽样的指数是 -0.500；接近该值说明下限与抽样不可区分",
+            f"expression floor = {self.coefficient:.2f} × n^{self.exponent:.3f} "
+            f"(exponent 95% CI {self.exponent_lo:.3f}–{self.exponent_hi:.3f})",
+            f"  from {self.n_obs} observations / {self.n_donors} donors, "
+            f"median effective n {self.median_n_eff:.0f}",
+            "  pure multinomial sampling gives -0.500; a value near it means the floor "
+            "is indistinguishable from sampling",
         ])
 
 
@@ -96,7 +97,7 @@ def floor_from_counts(
     a = np.asarray(counts_a, dtype=float)
     b = np.asarray(counts_b, dtype=float)
     if a.shape != b.shape:
-        raise ValueError(f"计数向量长度不等：{a.shape} 与 {b.shape}")
+        raise ValueError(f"count vectors differ in length: {a.shape} against {b.shape}")
     ta, tb = a.sum(), b.sum()
     if ta <= 0 or tb <= 0:
         return None
@@ -137,7 +138,7 @@ def estimate_expression_floor(
     work = work[(work.n_eff > 0) & (work.floor > 0)]
     if len(work) < 5:
         raise ValueError(
-            f"min_n_eff={config.min_n_eff} 之后只剩 {len(work)} 个观测，不足以拟合"
+            f"too few observations ({len(work)}) remain after min_n_eff={config.min_n_eff} to fit"
         )
 
     n = work.n_eff.to_numpy()
@@ -158,7 +159,8 @@ def estimate_expression_floor(
     lo, hi = (float(np.percentile(draws, 2.5)), float(np.percentile(draws, 97.5))) \
         if draws else (float("nan"), float("nan"))
 
-    logger.info("表达层指数 %.4f，系数 %.3f（%d 观测）", exponent, coefficient, len(work))
+    logger.info("expression exponent %.4f, coefficient %.3f (%d observations)",
+                exponent, coefficient, len(work))
     return ExpressionFloor(
         exponent=exponent, exponent_lo=lo, exponent_hi=hi, coefficient=coefficient,
         n_obs=len(work), n_donors=int(len(uniq)),

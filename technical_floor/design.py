@@ -37,7 +37,7 @@ def resolvable_difference(
 ) -> float:
     """The smallest resolvable between-group difference, in percentage points."""
     if donors <= 0 or nuclei_per_donor <= 0:
-        raise ValueError("供体数与每供体细胞数都必须为正")
+        raise ValueError("donors and nuclei_per_donor must both be positive")
     p = config.abundance
     total = donors * nuclei_per_donor
     return float(100.0 * config.z * kappa * math.sqrt(p * (1 - p)) * math.sqrt(2.0 / total))
@@ -50,7 +50,7 @@ def nuclei_required(
     p = config.abundance
     target = config.target_pp if target_pp is None else target_pp
     if target <= 0:
-        raise ValueError("目标差异必须为正")
+        raise ValueError("the target difference must be positive")
     return int(round(2.0 * (config.z * kappa * math.sqrt(p * (1 - p)) * 100.0 / target) ** 2))
 
 

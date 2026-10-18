@@ -27,7 +27,7 @@ def _require_columns(df: pd.DataFrame, required: Sequence[str], path: Path) -> N
     missing: List[str] = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(
-            f"{path} 缺少必需列 {missing}；需要 {list(required)}，实际有 {list(df.columns)}"
+            f"{path} is missing required columns {missing}; needs {list(required)}, has {list(df.columns)}"
         )
 
 
@@ -60,14 +60,14 @@ def read_composition(path: Path | str) -> pd.DataFrame:
     has_z = all(c in df.columns for c in COMPOSITION_ZSCORE_COLUMNS)
     if not (has_counts or has_z):
         raise ValueError(
-            f"{path} 必须提供 {list(COMPOSITION_COUNT_COLUMNS)} 或 "
-            f"{list(COMPOSITION_ZSCORE_COLUMNS)}；实际有 {list(df.columns)}"
+            f"{path} must provide either {list(COMPOSITION_COUNT_COLUMNS)} or "
+            f"{list(COMPOSITION_ZSCORE_COLUMNS)}; it has {list(df.columns)}"
         )
     if has_counts and (df[["n1", "n2"]] < 0).any().any():
-        raise ValueError(f"{path} 含负细胞计数")
+        raise ValueError(f"{path} contains negative nucleus counts")
     if has_z and (df.n_eff <= 0).any():
-        raise ValueError(f"{path} 含非正 n_eff")
-    logger.info("组成层输入：%d 行，%d 个供体，%d 个细胞类型",
+        raise ValueError(f"{path} contains non-positive n_eff")
+    logger.info("composition input: %d rows, %d donors, %d cell types",
                 len(df), df.donor.nunique(), df.celltype.nunique())
     return df
 
@@ -97,9 +97,10 @@ def read_expression(path: Path | str) -> pd.DataFrame:
     bad = (df.n_eff <= 0) | (df.floor <= 0)
     if bad.any():
         raise ValueError(
-            f"{path} 有 {int(bad.sum())} 行的 n_eff 或 floor 非正；对数-对数拟合无法使用"
+            f"{path} has {int(bad.sum())} row(s) with non-positive n_eff or floor; "
+            "a log-log fit cannot use them"
         )
-    logger.info("表达层输入：%d 行，%d 个供体", len(df), df.donor.nunique())
+    logger.info("expression input: %d rows, %d donors", len(df), df.donor.nunique())
     return df
 
 
@@ -123,12 +124,13 @@ def apply_pair_criterion(df: pd.DataFrame, min_nuclei: int) -> pd.DataFrame:
         than dropped, so a caller can report what was excluded.
     """
     if "n1" not in df.columns or "n2" not in df.columns:
-        raise ValueError("执行配对准则需要 n1 与 n2 两列")
+        raise ValueError("the pair criterion needs both an n1 and an n2 column")
     totals = df.groupby("donor")[["n1", "n2"]].sum()
     keep = totals[(totals.n1 >= min_nuclei) & (totals.n2 >= min_nuclei)].index
     dropped = sorted(set(totals.index) - set(keep))
     if dropped:
-        logger.warning("按 >=%d 核准则排除 %d 个供体：%s", min_nuclei, len(dropped), dropped)
+        logger.warning("the >=%d nucleus criterion excludes %d of the donors: %s",
+                       min_nuclei, len(dropped), dropped)
     out = df.copy()
     out["included_in_fit"] = out.donor.isin(keep)
     return out

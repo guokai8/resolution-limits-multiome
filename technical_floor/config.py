@@ -62,8 +62,8 @@ class FloorConfig:
         # Validate here rather than at the point of use: a bad abundance would
         # otherwise surface as a silently wrong design table.
         if not 0.0 < self.abundance < 1.0:
-            raise ValueError(f"abundance 必须在 (0,1) 内，收到 {self.abundance}")
+            raise ValueError(f"abundance must be in (0,1), got {self.abundance}")
         if self.target_pp <= 0:
-            raise ValueError(f"target_pp 必须为正，收到 {self.target_pp}")
+            raise ValueError(f"target_pp must be positive, got {self.target_pp}")
         if self.n_bootstrap < 0:
-            raise ValueError(f"n_bootstrap 不能为负，收到 {self.n_bootstrap}")
+            raise ValueError(f"n_bootstrap cannot be negative, got {self.n_bootstrap}")

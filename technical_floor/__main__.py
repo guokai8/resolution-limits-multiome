@@ -28,26 +28,26 @@ logger = logging.getLogger("technical_floor")
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="technical_floor",
-        description="从重复文库测量单核多组学的组成层与表达层分辨率下限。",
+        description="Measure composition and expression resolution floors from replicate libraries.",
     )
     p.add_argument("--composition", type=Path,
-                   help="长表 CSV：donor, celltype, n1, n2")
+                   help="long-form CSV: donor, celltype, n1, n2")
     p.add_argument("--expression", type=Path,
-                   help="长表 CSV：donor, celltype, n_eff, floor")
+                   help="long-form CSV: donor, celltype, n_eff, floor")
     p.add_argument("--out", type=Path, default=Path("technical_floor_out"),
-                   help="输出目录（默认 technical_floor_out）")
+                   help="output directory (default technical_floor_out)")
     p.add_argument("--min-nuclei", type=int, default=50,
-                   help="供体级最小细胞数准则，两个文库都要达到（默认 50）")
+                   help="donor-level minimum nucleus criterion, which both libraries must meet (default 50)")
     p.add_argument("--min-n-eff", type=float, default=0.0,
-                   help="进入标度拟合的最小有效细胞数（默认 0，即不设限）")
+                   help="minimum effective nucleus count to enter the scaling fit (default 0, no floor)")
     p.add_argument("--abundance", type=float, default=0.10,
-                   help="设计表所针对的细胞类型丰度（默认 0.10）")
+                   help="cell-type abundance the design tables are computed at (default 0.10)")
     p.add_argument("--target-pp", type=float, default=1.0,
-                   help="设计表要分辨的差异，单位百分点（默认 1.0）")
+                   help="difference the design tables resolve, in percentage points (default 1.0)")
     p.add_argument("--bootstrap", type=int, default=DEFAULT_BOOTSTRAP,
-                   help=f"自助次数（默认 {DEFAULT_BOOTSTRAP}，即论文沉积结果所用的次数）")
+                   help=f"bootstrap resamples (default {DEFAULT_BOOTSTRAP}, as used for the deposited results)")
     p.add_argument("--seed", type=int, default=DEFAULT_SEED,
-                   help=f"随机种子（默认 {DEFAULT_SEED}）")
+                   help=f"random seed (default {DEFAULT_SEED})")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
         format="%(levelname)s %(name)s: %(message)s",
     )
     if not args.composition and not args.expression:
-        logger.error("至少要给 --composition 或 --expression 之一")
+        logger.error("give at least one of --composition or --expression")
         return 2
 
     config = FloorConfig(
@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         abundance=args.abundance, target_pp=args.target_pp,
     )
     args.out.mkdir(parents=True, exist_ok=True)
-    print(f"technical_floor · 丰度 {config.abundance:.0%} · 目标 {config.target_pp} 个百分点\n")
+    print(f"technical_floor · abundance {config.abundance:.0%} · target {config.target_pp} percentage points\n")
 
     comp = None
     if args.composition:
@@ -81,8 +81,9 @@ def main(argv: list[str] | None = None) -> int:
             df = df[df.included_in_fit]
         else:
             logger.warning(
-                "组成层输入是预算好的 z/n_eff 形式，没有 n1/n2，无法执行 >=%d 核准则；"
-                "请确认输入已经过滤", config.min_nuclei_per_pair)
+                "the composition input is the precomputed z/n_eff form and carries no "
+                "n1/n2, so the >=%d nucleus criterion cannot be applied; check that the "
+                "input is already filtered", config.min_nuclei_per_pair)
         comp = estimate_composition_floor(df, config)
         print(comp.summary())
         comp.per_celltype.to_csv(args.out / "composition_kappa_by_celltype.csv", index=False)
@@ -90,8 +91,8 @@ def main(argv: list[str] | None = None) -> int:
             args.out / "composition_design_table.csv", index=False)
         req = composition_requirement(comp, config)
         req.to_csv(args.out / "composition_requirement.csv", index=False)
-        print("\n  每组所需细胞数，分辨 "
-              f"{config.target_pp} 个百分点：")
+        print("\n  nuclei per group to resolve "
+              f"{config.target_pp} percentage points:")
         for _, r in req.iterrows():
             print(f"    {r.basis:<32} κ={r.kappa:<6} {int(r.nuclei_per_group):>9,}")
         print()
@@ -107,19 +108,20 @@ def main(argv: list[str] | None = None) -> int:
             edf = edf[edf.included_in_fit]
         else:
             logger.warning(
-                "表达层输入没有 n1/n2，无法执行 >=%d 核配对准则；"
-                "拟合将使用全部供体", config.min_nuclei_per_pair)
+                "the expression input carries no n1/n2, so the >=%d nucleus pair "
+                "criterion cannot be applied; the fit will use every donor",
+                config.min_nuclei_per_pair)
         expr = estimate_expression_floor(edf, config)
         print(expr.summary())
         tbl = expression_design_table(expr)
         tbl.to_csv(args.out / "expression_design_table.csv", index=False)
-        print("\n  |log2 fold change| 技术噪声阈值：")
+        print("\n  |log2 fold change| technical noise thresholds:")
         for _, r in tbl.iterrows():
-            flag = "  (外推)" if r.extrapolated else ""
+            flag = "  (extrapolated)" if r.extrapolated else ""
             print(f"    n_eff={int(r.n_eff):>5}   {r.log2fc_threshold:.2f}{flag}")
         print()
 
-    print(f"写出到 {args.out}/")
+    print(f"written to {args.out}/")
     return 0
 
 

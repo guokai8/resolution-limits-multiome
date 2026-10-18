@@ -57,16 +57,16 @@ class CompositionFloor:
 
     def summary(self) -> str:
         lines = [
-            f"组成层过度离散 κ = {self.kappa:.3f} "
+            f"composition overdispersion κ = {self.kappa:.3f} "
             f"(95% CI {self.kappa_lo:.3f}–{self.kappa_hi:.3f})",
-            f"  基于 {self.n_pairs} 个配对 / {self.n_donors} 个供体",
+            f"  from {self.n_pairs} pairs / {self.n_donors} donors",
         ]
         if len(self.per_celltype):
             lo = self.per_celltype.kappa.min()
             hi = self.per_celltype.kappa.max()
-            lines.append(f"  逐细胞类型 κ 从 {lo:.2f} 到 {hi:.2f}（{hi/lo:.1f} 倍）")
+            lines.append(f"  per cell type κ runs {lo:.2f} to {hi:.2f} ({hi/lo:.1f}-fold)")
         if self.abundance_r is not None:
-            lines.append(f"  κ 与 log 丰度的相关 r = {self.abundance_r:+.2f}")
+            lines.append(f"  κ against log abundance r = {self.abundance_r:+.2f}")
         return "\n".join(lines)
 
 
@@ -76,7 +76,7 @@ def _zscores(df: pd.DataFrame) -> pd.DataFrame:
     tot1 = out.groupby("donor").n1.transform("sum")
     tot2 = out.groupby("donor").n2.transform("sum")
     if (tot1 <= 0).any() or (tot2 <= 0).any():
-        raise ValueError("有供体的某个文库细胞总数为零")
+        raise ValueError("a donor has zero total nuclei in one of its libraries")
     f1 = out.n1 / tot1
     f2 = out.n2 / tot2
     p = (f1 + f2) / 2.0
@@ -127,9 +127,9 @@ def estimate_composition_floor(
         work["p_mean"] = work["p"] if "p" in work.columns else np.nan
         work = work.dropna(subset=["ratio"])
     else:
-        raise ValueError("需要 n1/n2 或 z/n_eff")
+        raise ValueError("need either n1/n2 or z/n_eff")
     if not len(work):
-        raise ValueError("没有可用配对：所有细胞类型的合并占比为 0 或 1")
+        raise ValueError("no usable pairs: every cell type has a pooled proportion of 0 or 1")
 
     kappa = _rms(work.ratio.to_numpy())
 
@@ -161,7 +161,7 @@ def estimate_composition_floor(
     if len(per) > 2 and (per.mean_fraction > 0).all():
         r = float(np.corrcoef(np.log(per.mean_fraction), per.kappa)[0, 1])
 
-    logger.info("κ = %.3f（%d 配对 / %d 供体）", kappa, len(work), work.donor.nunique())
+    logger.info("κ = %.3f (%d pairs / %d donors)", kappa, len(work), work.donor.nunique())
     return CompositionFloor(
         kappa=kappa, kappa_lo=lo, kappa_hi=hi, per_celltype=per,
         n_pairs=len(work), n_donors=int(work.donor.nunique()), abundance_r=r,
