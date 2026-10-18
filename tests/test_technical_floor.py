@@ -1,8 +1,9 @@
-"""technical_floor 的测试。
+"""Tests for technical_floor.
 
-最重要的一组是 TestReproducesPublished：工具跑在论文自己沉积的表上，必须
-还原论文报告的每一个数。工具与论文之间任何一处不合，要么是工具错了，要么
-是论文错了——两种都必须先查清再往下走。
+The group that matters most is TestReproducesPublished: run on the paper's own
+deposited tables, the tool must return every number the paper reports. Any
+disagreement between the two means either the tool is wrong or the paper is,
+and both have to be resolved before anything else proceeds.
 """
 
 from __future__ import annotations
@@ -17,7 +18,8 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
-# 包在本仓库位于根目录，在论文工程里位于 code/；两种布局都要能跑
+# The package sits at the repository root here and under code/ in the paper
+# project. Both layouts have to work.
 technical_floor_path = None
 for candidate in (ROOT, ROOT / "code"):
     if (candidate / "technical_floor").is_dir():
@@ -112,7 +114,8 @@ class TestPairCriterion(unittest.TestCase):
         self.assertFalse(out[out.donor == "B"].included_in_fit.any())
 
     def test_criterion_is_per_donor_not_per_celltype(self) -> None:
-        # 单个细胞类型很小不该踢掉供体；供体汇总达标即可
+        # One small cell type must not disqualify a donor; the criterion is
+        # applied to the donor total.
         df = pd.DataFrame({
             "donor": ["A", "A"], "celltype": ["big", "tiny"],
             "n1": [95, 5], "n2": [95, 5],
@@ -121,18 +124,20 @@ class TestPairCriterion(unittest.TestCase):
 
 
 class TestReproducesPublished(unittest.TestCase):
-    """工具跑论文的沉积数据，必须还原论文的数。
+    """Run on the paper's deposited data, the tool must return the paper's numbers.
 
-    这一组**不允许被跳过**。整套测试的意义就在于此：若示例输入没有随包分发，
-    静默跳过会让测试打印 OK 而什么都没验证，反而比没有测试更坏。
+    This group must NOT be skippable. It is the whole point of the suite: if the
+    example inputs were not shipped, skipping silently would print OK while
+    verifying nothing, which is worse than having no tests at all.
     """
 
     @classmethod
     def setUpClass(cls) -> None:
         if not EXAMPLES.exists():
             raise AssertionError(
-                f"示例输入缺失：{EXAMPLES}。这组测试是本包唯一的验收依据，"
-                f"不能跳过——请随包分发 data/example_inputs/。")
+                f"example inputs are missing: {EXAMPLES}. This group is the only "
+                f"acceptance check this package has and must not be skipped -- ship "
+                f"data/example_inputs/ with it.")
         cls.cfg = FloorConfig(seed=0)
         cls.comp = estimate_composition_floor(
             read_composition(EXAMPLES / "motor_cortex_composition_pairs.csv"), cls.cfg)
@@ -168,7 +173,7 @@ class TestReproducesPublished(unittest.TestCase):
         self.assertEqual(self.expr.n_donors, 26)
 
     def test_confidence_intervals_match_the_manuscript(self) -> None:
-        """区间此前是工具与论文唯一不一致的地方，因此单独断言。"""
+        """The intervals were the one place tool and paper once disagreed."""
         self.assertAlmostEqual(self.comp.kappa_lo, 2.98, places=2)
         self.assertAlmostEqual(self.comp.kappa_hi, 5.66, places=2)
         self.assertAlmostEqual(self.expr.exponent_lo, -0.567, places=3)
@@ -180,7 +185,7 @@ class TestReproducesPublished(unittest.TestCase):
             self.assertAlmostEqual(tbl[n], expected, places=2, msg=f"n_eff={n}")
 
     def test_the_pair_criterion_changes_the_answer(self) -> None:
-        """不执行准则会得到论文最初报告的、已被撤回的那组数。"""
+        """Skipping the criterion returns the superseded numbers first reported."""
         raw = read_expression(EXAMPLES / "motor_cortex_expression_floors.csv")
         unfiltered = estimate_expression_floor(raw, self.cfg)
         self.assertEqual(unfiltered.n_donors, 27)
@@ -189,7 +194,11 @@ class TestReproducesPublished(unittest.TestCase):
 
 
 class TestCommandLineMatchesLibrary(unittest.TestCase):
-    """CLI 自带过一份与库不同的默认值，库层测试抓不到，所以单独跑一次命令行。"""
+    """The CLI once carried a default the library did not.
+
+    A library-level test cannot catch that, so the command line is exercised
+    once in its own right.
+    """
 
     @unittest.skipUnless(EXAMPLES.exists(), "example inputs not built")
     def test_cli_reproduces_the_published_intervals(self) -> None:
@@ -207,8 +216,9 @@ class TestCommandLineMatchesLibrary(unittest.TestCase):
             )
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("4.268", r.stdout)
-        self.assertIn("2.976", r.stdout)   # κ 区间下界，论文报 2.98
-        self.assertIn("5.664", r.stdout)   # 上界，论文报 5.66；默认自助次数走偏会变成 5.678
+        self.assertIn("2.976", r.stdout)   # lower κ bound; the paper reports 2.98
+        self.assertIn("5.664", r.stdout)   # upper bound; the paper reports 5.66. A
+                                           # different bootstrap count gives 5.678
         self.assertIn("4.58", r.stdout)
         self.assertIn("-0.497", r.stdout)
 
